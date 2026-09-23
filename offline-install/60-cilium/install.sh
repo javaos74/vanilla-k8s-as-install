@@ -129,14 +129,33 @@ run_checks() {
         check "cilium status (cli 진단)" retry_until 120 bash -c "cilium status --wait --wait-duration 90s"
     fi
 
-    # 실제 통신 검증: 파드 하나 띄워 클러스터 DNS 로 이름을 해석해 본다.
-    # CNI 가 동작하지 않으면 여기서 반드시 실패한다.
-    check "파드 기동 + 클러스터 DNS 해석" retry_until 180 bash -c '
+    # 실제 데이터플레인 검증: 파드 하나를 띄워 Ready 까지 가는지 본다.
+    # CNI 가 동작하지 않으면 여기서 반드시 실패한다(sandbox 생성 단계에서 막힌다).
+    #
+    # 판정 이름을 "DNS 해석"이라고 쓰지 않는다. pause 이미지에는 셸도
+    # nslookup 도 없어 실제 이름 해석을 하지 않는다. 하는 일과 이름을
+    # 맞춘다 — DNS 는 아래에서 별도로 본다.
+    #
+    # tolerations 를 넣는 이유: 다중 CP 클러스터에서는 CP 의
+    # control-plane:NoSchedule taint 가 유지된다. worker 가 아직 없으면
+    # 톨러레이션 없는 파드는 어디에도 못 뜬다(실측: 3-CP + worker 0 에서
+    # 이 판정만 실패). 진단용 임시 파드이므로 모든 taint 를 견디게 한다.
+    check "파드 기동(CNI 데이터플레인)" retry_until 180 bash -c '
         kubectl delete pod cni-smoke --ignore-not-found --wait=false >/dev/null 2>&1
         sleep 1
         kubectl run cni-smoke --image=registry.k8s.io/pause:3.10.2 \
-            --restart=Never --command -- /pause >/dev/null 2>&1
+            --restart=Never \
+            --overrides="{\"spec\":{\"tolerations\":[{\"operator\":\"Exists\"}]}}" \
+            --command -- /pause >/dev/null 2>&1
         kubectl wait --for=condition=Ready pod/cni-smoke --timeout=120s >/dev/null 2>&1'
+
+    # CoreDNS Running 은 위에서 이미 본다. 여기서는 Service 에 엔드포인트가
+    # 붙었는지를 본다 — 파드가 Running 이어도 readiness 를 통과하지 못하면
+    # 엔드포인트가 비고 이름 해석이 되지 않는다.
+    check "kube-dns Service 에 엔드포인트 존재" retry_until 120 bash -c "
+        [[ -n \$(kubectl -n kube-system get endpointslices \
+             -l kubernetes.io/service-name=kube-dns \
+             -o jsonpath='{.items[*].endpoints[*].addresses[0]}' 2>/dev/null) ]]"
     if kubectl get pod cni-smoke >/dev/null 2>&1; then
         POD_IP="$(kubectl get pod cni-smoke -o jsonpath='{.status.podIP}' 2>/dev/null)"
         log "테스트 파드 IP: ${POD_IP:-없음} (Pod CIDR ${POD_CIDR} 범위여야 정상)"

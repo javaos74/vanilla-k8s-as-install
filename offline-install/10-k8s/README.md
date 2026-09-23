@@ -342,7 +342,7 @@ kubectl -n kube-system exec etcd-<살아있는CP> -- etcdctl \
 
 LB 백엔드에서도 빼야 한다.
 
-#### 4.0.6 검증 상태
+#### 4.0.5 검증 상태
 
 2026-09-23 에 Ubuntu 24.04.4 노드 3대 + LB 1대로 에어갭 검증했다.
 
@@ -392,6 +392,17 @@ FAIL etcd 전 멤버 healthy
 CP 제거(`--reset`)도 검증했다. 2대 중 1대를 reset 하니 kubeadm 이 etcd 멤버를
 스스로 제거해 목록이 2 → 1 로 줄었고, 새 `certificate-key` 를 발급받아 다시
 조인하는 것까지 확인했다.
+
+**CNI 적용까지 이어서 확인했다.** 3-CP 클러스터에 `60-cilium` 을 올려 CP 3대
+전부 `Ready`, CoreDNS `Running`, 테스트 파드 IP 가 Pod CIDR 범위(10.244.2.23)
+임을 확인했다(판정 10/10).
+
+이 과정에서 taint 유지 정책의 영향이 하나 드러났다. `60-cilium` 의 스모크
+테스트 파드가 톨러레이션이 없어, **worker 가 없는 CP-only 클러스터에서는
+스케줄되지 못했다.** 진단용 임시 파드이므로 모든 taint 를 견디도록 고쳤다.
+CoreDNS 는 kubeadm 이 기본으로 control-plane 톨러레이션을 넣어 주므로 영향이 없다.
+
+추가 CP 에도 CNI 이미지를 적재해야 한다 — `60-cilium/README.md` 를 볼 것.
 
 ### 4.1 controlPlaneEndpoint 를 나중에 추가할 수 없는 이유
 

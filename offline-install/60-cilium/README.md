@@ -3,6 +3,8 @@
 `10-k8s` 로 만든 단일 노드 클러스터에 CNI 를 넣어 노드를 `Ready` 로 만든다.
 
 양쪽 OS 에서 에어갭 설치를 수행해 **판정 9/9 통과**를 확인했다.
+다중 CP(3-CP HA) 에서도 검증했다 — CP 3대 전부 Ready, CoreDNS Running,
+추가 CP 에서 `--role worker` 이미지 적재 5/5, 에어갭 상태에서 파드 재기동 확인.
 worker(24.04) 에서는 `--role worker` 로 이미지만 적재해 **판정 5/5 통과**,
 노드 2대 모두 Ready(`cilium` DaemonSet 2/2, `Cluster health 2/2 reachable`)를 확인했다.
 
@@ -107,6 +109,28 @@ sudo ./install.sh
 # worker 에서 (10-k8s --role worker 로 조인이 끝난 뒤)
 sudo ./install.sh --role worker          # 이미지만 적재
 sudo ./install.sh --role worker --check-only
+```
+
+#### 추가 control plane 도 같은 방식으로 이미지를 적재해야 한다
+
+`--role worker` 는 이름이 worker 지만 **하는 일은 "이미지만 적재"** 다. 다중 CP
+클러스터의 2번째·3번째 CP 에도 그대로 써야 한다. DaemonSet 은 모든 노드에
+파드를 띄우므로, 이미지가 없는 노드에서는 `ImagePullBackOff` 가 된다.
+
+```bash
+# 추가 CP 에서 (10-k8s 로 control plane 조인이 끝난 뒤)
+sudo ./install.sh --role worker          # 이미지만 적재. helm 은 건드리지 않는다
+```
+
+빠뜨리면 그 노드가 인터넷에 나갈 수 있는 환경에서는 조용히 성공한다 —
+레지스트리에서 직접 받아버리기 때문이다. 실제 에어갭에서만 드러나므로
+검증 중에 놓치기 쉽다. 실측으로 확인한 함정이다.
+
+```
+# 적재하지 않은 노드에서 ctr 로 본 이미지 (다이제스트 형태 = 레지스트리 pull)
+quay.io/cilium/cilium@sha256:2939231d...
+# 번들로 적재한 노드 (태그 형태 = ctr images import)
+quay.io/cilium/cilium:v1.20.2
 ```
 
 worker 에서는 **helm 을 돌리지 않는다.** Cilium 은 DaemonSet 이라 control plane 에서

@@ -1,0 +1,78 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nfs-test-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName omitted on purpose: exercises nfs-csi as the default class
+---
+# Writer pinned to k8s-01. Runs as non-root to prove mountPermissions works.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nfs-writer
+  namespace: default
+spec:
+  nodeName: k8s-01
+  restartPolicy: Never
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+  containers:
+    - name: writer
+      image: busybox:1.36
+      command:
+        - sh
+        - -c
+        - |
+          set -e
+          echo "hello-from-$(hostname)-$(date -Iseconds)" > /data/probe.txt
+          echo "uid=$(id -u) gid=$(id -g)" >> /data/probe.txt
+          sync
+          echo "WROTE:"; cat /data/probe.txt
+          ls -la /data
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: nfs-test-pvc
+---
+# Reader pinned to a DIFFERENT node, proving ReadWriteMany across nodes.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nfs-reader
+  namespace: default
+spec:
+  nodeName: k8s-03
+  restartPolicy: Never
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+  containers:
+    - name: reader
+      image: busybox:1.36
+      command:
+        - sh
+        - -c
+        - |
+          set -e
+          for i in $(seq 1 30); do [ -f /data/probe.txt ] && break; sleep 2; done
+          echo "READ FROM $(hostname):"; cat /data/probe.txt
+          echo "appended-by-reader-$(hostname)" >> /data/probe.txt
+          echo "RWX append OK"
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: nfs-test-pvc

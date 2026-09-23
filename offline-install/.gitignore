@@ -1,0 +1,25 @@
+# 빌드 산출물 — 노드에서 생성되며 크기가 1GB 이상이다. 저장소에 넣지 않는다.
+bundle/
+.src/
+
+# 실수로 번들 아카이브가 루트에 떨어진 경우
+*.tar.gz
+*.tar.gz.sha256
+
+# 편집기·OS 부산물
+.DS_Store
+*.swp
+*~
+
+# 저장소 루트 .gitignore 에 자격증명 차단용 `*.env` 가 있어서 versions.env 까지
+# 함께 무시된다. 이 파일은 버전 핀 목록이고 비밀이 없다. 없으면 모든
+# build-bundle.sh / install.sh 가 동작하지 않으므로 명시적으로 되살린다.
+!00-common/versions.env
+
+# 사이트별 설정 — 내부 IP·사내 호스트명이 들어간다. 공개 저장소에 올리지 않는다.
+# 최초 1회 site.env.example 를 복사해 채울 것.
+00-common/site.env
+
+# 내부 작업 기록 — 실제 인프라 인벤토리·접속 정보가 들어간다. 로컬 전용.
+AGENTS.md
+PROGRESS.md

@@ -1,0 +1,79 @@
+[preflight] Running pre-flight checks
+I0916 15:00:21.502465   11401 join.go:423] [preflight] found NodeName empty; using OS hostname as NodeName
+I0916 15:00:21.502576   11401 initconfiguration.go:124] detected and using CRI socket: unix:///var/run/containerd/containerd.sock
+I0916 15:00:21.502627   11401 preflight.go:93] [preflight] Running general checks
+I0916 15:00:21.502648   11401 checks.go:316] validating the existence of file /etc/kubernetes/kubelet.conf
+I0916 15:00:21.502665   11401 checks.go:316] validating the existence of file /etc/kubernetes/bootstrap-kubelet.conf
+I0916 15:00:21.502674   11401 checks.go:90] validating the container runtime
+I0916 15:00:21.504008   11401 remote_runtime.go:171] "Validated CRI v1 runtime API"
+I0916 15:00:21.505126   11401 remote_image.go:140] "Validated CRI v1 image API"
+I0916 15:00:21.505657   11401 checks.go:121] validating the container runtime version compatibility
+I0916 15:00:21.506064   11401 remote_runtime.go:171] "Validated CRI v1 runtime API"
+I0916 15:00:21.506459   11401 remote_image.go:140] "Validated CRI v1 image API"
+I0916 15:00:21.506855   11401 checks.go:686] validating whether swap is enabled or not
+I0916 15:00:21.506888   11401 checks.go:406] validating the presence of executable losetup
+I0916 15:00:21.506918   11401 checks.go:406] validating the presence of executable mount
+I0916 15:00:21.506929   11401 checks.go:406] validating the presence of executable cp
+I0916 15:00:21.506937   11401 checks.go:552] running system verification checks
+I0916 15:00:21.541231   11401 checks.go:437] checking whether the given node name is valid and reachable using net.LookupHost
+I0916 15:00:21.541346   11401 checks.go:652] validating kubelet version
+I0916 15:00:21.567161   11401 checks.go:166] validating if the "kubelet" service is enabled and active
+I0916 15:00:21.573735   11401 checks.go:239] validating availability of port 10250
+I0916 15:00:21.573883   11401 checks.go:316] validating the existence of file /etc/kubernetes/pki/ca.crt
+I0916 15:00:21.573897   11401 checks.go:466] validating if the connectivity type is via proxy or direct
+I0916 15:00:21.573931   11401 checks.go:365] validating the contents of file /proc/sys/net/ipv4/ip_forward
+I0916 15:00:21.573961   11401 join.go:553] [preflight] Discovering cluster-info
+I0916 15:00:21.573972   11401 token.go:71] [discovery] Created cluster-info discovery client, requesting info from "<CP_PRIVATE_IP>:6443"
+I0916 15:00:21.574052   11401 envvar.go:195] "Feature gate default state" feature="AtomicFIFO" enabled=true
+I0916 15:00:21.574060   11401 envvar.go:195] "Feature gate default state" feature="InformerResourceVersion" enabled=true
+I0916 15:00:21.574064   11401 envvar.go:195] "Feature gate default state" feature="ClientsAllowTLSCacheGC" enabled=true
+I0916 15:00:21.574067   11401 envvar.go:195] "Feature gate default state" feature="ClientsPreferCBOR" enabled=false
+I0916 15:00:21.574070   11401 envvar.go:195] "Feature gate default state" feature="ClientsAllowCBOR" enabled=false
+I0916 15:00:21.574072   11401 envvar.go:195] "Feature gate default state" feature="InOrderInformers" enabled=true
+I0916 15:00:21.574079   11401 envvar.go:195] "Feature gate default state" feature="ClientsAllowCARotation" enabled=true
+I0916 15:00:21.574089   11401 envvar.go:195] "Feature gate default state" feature="WatchListClient" enabled=true
+I0916 15:00:21.574092   11401 envvar.go:195] "Feature gate default state" feature="InOrderInformersBatchProcess" enabled=true
+I0916 15:00:21.574105   11401 envvar.go:195] "Feature gate default state" feature="UnlockWhileProcessingFIFO" enabled=true
+I0916 15:00:21.574300   11401 token.go:229] [discovery] Waiting for the cluster-info ConfigMap to receive a JWS signature for token ID "dnjvic"
+I0916 15:00:21.579221   11401 token.go:126] [discovery] Requesting info from "<CP_PRIVATE_IP>:6443" again to validate TLS against the pinned public key
+I0916 15:00:21.579394   11401 token.go:229] [discovery] Waiting for the cluster-info ConfigMap to receive a JWS signature for token ID "dnjvic"
+I0916 15:00:21.583205   11401 token.go:149] [discovery] Cluster info signature and contents are valid and TLS certificate validates against pinned roots, will use API Server "<CP_PRIVATE_IP>:6443"
+I0916 15:00:21.583217   11401 discovery.go:57] [discovery] Using provided TLSBootstrapToken as authentication credentials for the join process
+[preflight] Reading configuration from the "kubeadm-config" ConfigMap in namespace "kube-system"...
+[preflight] Use 'kubeadm init phase upload-config kubeadm --config your-config-file' to re-upload it.
+I0916 15:00:21.583271   11401 discovery.go:85] [discovery] Using CA certificate from discovery kubeconfig:
+CA Certificate:
+	Subject: CN=kubernetes
+	Issuer: CN=kubernetes
+	SerialNumber: 4410296573743284872
+	NotBefore: 2026-09-16 14:54:10 +0000 UTC
+	NotAfter: 2036-09-13 14:59:10 +0000 UTC
+	SignatureAlgorithm: SHA256-RSA
+	PublicKeyAlgorithm: RSA
+	Hash: sha256:5bb2559ddd2afc86e4b32d5df271b3129e911959ae22c0846f8e52a08fd39ba4
+I0916 15:00:21.583279   11401 join.go:567] [preflight] Fetching init configuration
+I0916 15:00:21.583283   11401 join.go:681] [preflight] Retrieving KubeConfig objects
+I0916 15:00:21.587336   11401 kubeproxy.go:55] attempting to download the KubeProxyConfiguration from ConfigMap "kube-proxy"
+I0916 15:00:21.589196   11401 kubelet.go:73] attempting to download the KubeletConfiguration from ConfigMap "kubelet-config"
+W0916 15:00:21.591110   11401 utils.go:69] The recommended value for "bindAddress" in "KubeProxyConfiguration" is: ::; the provided value is: 0.0.0.0
+I0916 15:00:21.591141   11401 preflight.go:108] [preflight] Running configuration dependant checks
+I0916 15:00:21.591151   11401 controlplaneprepare.go:225] [download-certs] Skipping certs download
+I0916 15:00:21.591281   11401 kubelet.go:146] [kubelet-start] writing bootstrap kubelet config file at /etc/kubernetes/bootstrap-kubelet.conf
+I0916 15:00:21.591589   11401 kubelet.go:161] [kubelet-start] writing CA certificate at /etc/kubernetes/pki/ca.crt
+I0916 15:00:21.591645   11401 kubelet.go:177] [kubelet-start] Checking for an existing Node in the cluster with name "k8s-02" and status "Ready"
+I0916 15:00:21.592668   11401 kubelet.go:192] [kubelet-start] Stopping the kubelet
+[kubelet-start] Writing kubelet configuration to file "/var/lib/kubelet/instance-config.yaml"
+[patches] Applied patch of type "application/strategic-merge-patch+json" to target "kubeletconfiguration"
+[kubelet-start] Writing kubelet configuration to file "/var/lib/kubelet/config.yaml"
+[kubelet-start] Writing kubelet environment file with flags to file "/var/lib/kubelet/kubeadm-flags.env"
+[kubelet-start] Starting the kubelet
+[kubelet-check] Waiting for a healthy kubelet at http://127.0.0.1:10248/healthz. This can take up to 4m0s
+[kubelet-check] The kubelet is healthy after 501.271992ms
+[kubelet-start] Waiting for the kubelet to perform the TLS Bootstrap
+
+This node has joined the cluster:
+* Certificate signing request was sent to apiserver and a response was received.
+* The Kubelet was informed of the new secure connection details.
+
+Run 'kubectl get nodes' on the control-plane to see this node join the cluster.
+

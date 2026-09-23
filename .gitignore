@@ -1,0 +1,23 @@
+# etcd 스냅샷 — 클러스터 전체 Secret(평문)이 들어있다. 절대 커밋 금지
+backups/
+*.db
+
+# 대용량 바이너리 (116MB, GitHub 100MB 제한 초과)
+uipathctl
+
+# 개인키 / 자격증명
+*.key
+*.pem
+*.env
+
+# 리다이렉션 전 원본 로그
+*.orig
+
+# 에이전트 로컬 설정 — 실제 IP/인스턴스 ID 보유
+.kiro/
+
+# 치환 전 원본 백업
+_local/
+
+# macOS 부산물
+.DS_Store

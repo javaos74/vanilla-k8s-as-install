@@ -1,0 +1,30 @@
+#---------------------------------------------------------------------
+# Self-signed server certificate for k8s.myrobots.co.kr
+# (same style as /opt/minio/certs/public.crt: RSA 4096, SHA-256, 10y)
+#
+# Generate:
+#   openssl req -x509 -nodes -newkey rsa:4096 -sha256 -days 3650 \
+#     -keyout k8s.key -out k8s.crt -config k8s-openssl.cnf -extensions v3_req
+#---------------------------------------------------------------------
+[req]
+default_md         = sha256
+prompt             = no
+distinguished_name = dn
+req_extensions     = v3_req
+x509_extensions    = v3_req
+
+[dn]
+C  = KR
+O  = UiPath PreSales
+OU = Vanilla K8s
+CN = k8s.myrobots.co.kr
+
+[v3_req]
+basicConstraints = critical, CA:FALSE
+keyUsage         = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName   = @alt_names
+
+[alt_names]
+DNS.1 = k8s.myrobots.co.kr
+DNS.2 = *.k8s.myrobots.co.kr

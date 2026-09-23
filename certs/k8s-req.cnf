@@ -1,0 +1,33 @@
+#---------------------------------------------------------------------
+# CSR + extensions for the k8s.myrobots.co.kr server certificate
+# (Automation Suite ingress FQDN), signed by the "uipath" root CA.
+#
+#   openssl req -new -nodes -newkey rsa:4096 -keyout k8s.key \
+#     -out k8s.csr -config k8s-req.cnf
+#   openssl x509 -req -in k8s.csr -days 3650 -sha256 \
+#     -CA uipath-ca.crt -CAkey uipath-ca.key -CAcreateserial \
+#     -out k8s.crt -extfile k8s-req.cnf -extensions v3_req
+#---------------------------------------------------------------------
+[req]
+default_md         = sha256
+prompt             = no
+distinguished_name = dn
+req_extensions     = v3_req
+
+[dn]
+C  = KR
+O  = UiPath PreSales
+OU = Vanilla K8s
+CN = k8s.myrobots.co.kr
+
+[v3_req]
+basicConstraints = critical, CA:FALSE
+keyUsage         = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName   = @alt_names
+
+[alt_names]
+# Automation Suite exposes per-service subdomains (alm.<fqdn>, etc.),
+# so the wildcard is required alongside the apex.
+DNS.1 = k8s.myrobots.co.kr
+DNS.2 = *.k8s.myrobots.co.kr

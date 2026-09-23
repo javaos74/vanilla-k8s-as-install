@@ -1,0 +1,35 @@
+#---------------------------------------------------------------------
+# Root CA "uipath" for the vanilla K8s Automation Suite lab.
+#
+# Why a real CA is required:
+#   RHEL-based pods (prereq-runner, cert-trustor) build their trust store
+#   with p11-kit's `update-ca-trust extract`, which only emits certificates
+#   classified as CA anchors. A self-signed *leaf* certificate (CA:FALSE)
+#   is stored as "other-entry" and silently dropped from
+#   /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem — the file Go reads.
+#   Debian's update-ca-certificates simply concatenates, which is why the
+#   same certificate worked on the Ubuntu nodes but not inside the pods.
+#
+# pathlen:0 -> may sign end-entity certificates, but no sub-CAs.
+#
+# Generate:
+#   openssl req -x509 -nodes -newkey rsa:4096 -sha256 -days 3650 \
+#     -keyout uipath-ca.key -out uipath-ca.crt \
+#     -config uipath-ca-openssl.cnf -extensions v3_ca
+#---------------------------------------------------------------------
+[req]
+default_md         = sha256
+prompt             = no
+distinguished_name = dn
+x509_extensions    = v3_ca
+
+[dn]
+C  = KR
+O  = UiPath PreSales
+OU = Vanilla K8s
+CN = uipath
+
+[v3_ca]
+basicConstraints       = critical, CA:TRUE, pathlen:0
+keyUsage               = critical, keyCertSign, cRLSign
+subjectKeyIdentifier   = hash

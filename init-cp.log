@@ -1,0 +1,68 @@
+[config/images] Pulled registry.k8s.io/kube-apiserver:v1.36.4
+[config/images] Pulled registry.k8s.io/kube-controller-manager:v1.36.4
+[config/images] Pulled registry.k8s.io/kube-scheduler:v1.36.4
+[config/images] Pulled registry.k8s.io/kube-proxy:v1.36.4
+[config/images] Pulled registry.k8s.io/coredns/coredns:v1.14.2
+[config/images] Pulled registry.k8s.io/pause:3.10.2
+[config/images] Pulled registry.k8s.io/etcd:3.6.8-0
+=== INIT ===
+[kubelet-start] Starting the kubelet
+[wait-control-plane] Waiting for the kubelet to boot up the control plane as static Pods from directory "/etc/kubernetes/manifests"
+[kubelet-check] Waiting for a healthy kubelet at http://127.0.0.1:10248/healthz. This can take up to 4m0s
+[kubelet-check] The kubelet is healthy after 474.812µs
+[control-plane-check] Waiting for healthy control plane components. This can take up to 4m0s
+[control-plane-check] Checking kube-apiserver at https://<CP_PRIVATE_IP>:6443/livez
+[control-plane-check] Checking kube-controller-manager at https://127.0.0.1:10257/healthz
+[control-plane-check] Checking kube-scheduler at https://127.0.0.1:10259/livez
+[control-plane-check] kube-scheduler is healthy after 2.945064ms
+[control-plane-check] kube-controller-manager is healthy after 3.285014ms
+[control-plane-check] kube-apiserver is healthy after 1.501215865s
+[upload-config] Storing the configuration used in ConfigMap "kubeadm-config" in the "kube-system" Namespace
+[kubelet] Creating a ConfigMap "kubelet-config" in namespace kube-system with the configuration for the kubelets in the cluster
+[upload-certs] Storing the certificates in Secret "kubeadm-certs" in the "kube-system" Namespace
+[upload-certs] Using certificate key:
+5d889948bd1f8a346ad13627b3f6f76146a0cdcc3c3a491ffc7929992eb1b4cb
+[mark-control-plane] Marking the node k8s-cp as control-plane by adding the labels: [node-role.kubernetes.io/control-plane node.kubernetes.io/exclude-from-external-load-balancers]
+[mark-control-plane] Marking the node k8s-cp as control-plane by adding the taints [node-role.kubernetes.io/control-plane:NoSchedule]
+[bootstrap-token] Using token: <REDACTED-BOOTSTRAP-TOKEN>
+[bootstrap-token] Configuring bootstrap tokens, cluster-info ConfigMap, RBAC Roles
+[bootstrap-token] Configured RBAC rules to allow Node Bootstrap tokens to get nodes
+[bootstrap-token] Configured RBAC rules to allow Node Bootstrap tokens to post CSRs in order for nodes to get long term certificate credentials
+[bootstrap-token] Configured RBAC rules to allow the csrapprover controller automatically approve CSRs from a Node Bootstrap Token
+[bootstrap-token] Configured RBAC rules to allow certificate rotation for all node client certificates in the cluster
+[bootstrap-token] Configured RBAC rules to allow the API server kubelet client certificate to access the kubelet API
+[bootstrap-token] Creating the "cluster-info" ConfigMap in the "kube-public" namespace
+[kubelet-finalize] Updating "/etc/kubernetes/kubelet.conf" to point to a rotatable kubelet client certificate and key
+[addons] Applied essential addon: CoreDNS
+[addons] Applied essential addon: kube-proxy
+
+Your Kubernetes control-plane has initialized successfully!
+
+To start using your cluster, you need to run the following as a regular user:
+
+  mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+Alternatively, if you are the root user, you can run:
+
+  export KUBECONFIG=/etc/kubernetes/admin.conf
+
+You should now deploy a pod network to the cluster.
+Run "kubectl apply -f [podnetwork].yaml" with one of the options listed at:
+  https://kubernetes.io/docs/concepts/cluster-administration/addons/
+
+You can now join any number of control-plane nodes running the following command on each as root:
+
+  kubeadm join <CP_PRIVATE_IP>:6443 --token <REDACTED-BOOTSTRAP-TOKEN> \
+	--discovery-token-ca-cert-hash sha256:5bb2559ddd2afc86e4b32d5df271b3129e911959ae22c0846f8e52a08fd39ba4 \
+	--control-plane --certificate-key <REDACTED-CERTIFICATE-KEY>
+
+Please note that the certificate-key gives access to cluster sensitive data, keep it secret!
+As a safeguard, uploaded-certs will be deleted in two hours; If necessary, you can use
+"kubeadm init phase upload-certs --upload-certs" to reload certs afterward.
+
+Then you can join any number of worker nodes by running the following on each as root:
+
+kubeadm join <CP_PRIVATE_IP>:6443 --token <REDACTED-BOOTSTRAP-TOKEN> \
+	--discovery-token-ca-cert-hash sha256:5bb2559ddd2afc86e4b32d5df271b3129e911959ae22c0846f8e52a08fd39ba4 

@@ -1,0 +1,43 @@
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: <CP_PRIVATE_IP>
+  bindPort: 6443
+nodeRegistration:
+  name: k8s-cp
+  criSocket: unix:///var/run/containerd/containerd.sock
+  imagePullPolicy: IfNotPresent
+  kubeletExtraArgs:
+    - name: node-ip
+      value: <CP_PRIVATE_IP>
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+kubernetesVersion: v1.36.4
+clusterName: k8s
+controlPlaneEndpoint: <CP_PRIVATE_IP>:6443
+networking:
+  podSubnet: 10.244.0.0/16
+  serviceSubnet: 10.96.0.0/12
+  dnsDomain: cluster.local
+apiServer:
+  certSANs:
+    - k8s-cp
+    - <CP_PRIVATE_IP>
+    # Elastic IP <CP_EIP_ALLOCATION_ID> - stable across stop/start.
+    # Replaced the old auto-assigned <OLD_CP_PUBLIC_IP>, which was released back to AWS.
+    - <CP_PUBLIC_IP>
+    - <CP_PUBLIC_DNS>
+    - 127.0.0.1
+    - localhost
+etcd:
+  local:
+    dataDir: /var/lib/etcd
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: systemd
+---
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+kind: KubeProxyConfiguration
+mode: iptables

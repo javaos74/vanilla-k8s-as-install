@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+#---------------------------------------------------------------------
+# minio-trace — run `mcli admin trace` against the local MinIO container
+# without exposing root credentials on the command line or in history.
+#
+# Credentials are read from the running container's environment, so they
+# never appear in shell history, process args, or an mcli config file.
+#
+# Usage:
+#   sudo minio-trace                        # all S3 API requests (default)
+#   sudo minio-trace --errors               # only failed requests
+#   sudo minio-trace --status-code 403      # only 403s
+#   sudo minio-trace -v --errors            # full headers + body on errors
+#   sudo minio-trace --path '/uipath/**'    # only this bucket
+#   sudo minio-trace --response-duration 1s # only slow requests
+#---------------------------------------------------------------------
+set -euo pipefail
+
+ENDPOINT="${MINIO_TRACE_ENDPOINT:-https://minio.myrobots.co.kr:9000}"
+
+cid=$(docker ps --filter "publish=9000" --filter "status=running" -q | head -1)
+if [[ -z "$cid" ]]; then
+  echo "minio-trace: no running container publishing port 9000" >&2
+  exit 1
+fi
+
+env_of() {
+  docker inspect "$cid" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+    | grep "^$1=" | cut -d= -f2-
+}
+
+ru=$(env_of MINIO_ROOT_USER)
+rp=$(env_of MINIO_ROOT_PASSWORD)
+if [[ -z "$ru" || -z "$rp" ]]; then
+  echo "minio-trace: could not read root credentials from container $cid" >&2
+  exit 1
+fi
+
+# Default to S3 API calls only; bootstrap/internal noise is suppressed.
+args=("$@")
+if ! printf '%s\n' "${args[@]}" | grep -q -- '--call'; then
+  args+=(--call s3)
+fi
+
+export MC_HOST_minioroot="${ENDPOINT/:\/\//://${ru}:${rp}@}"
+exec mcli --no-color admin trace "${args[@]}" minioroot

@@ -1,0 +1,45 @@
+---
+# Dynamic provisioning against the NFS export on myubuntu (<NFS_PRIVATE_IP>:/data/nfs).
+# Each PVC becomes a subdirectory under the export: /data/nfs/<pvc-namespace>-<pvc-name>-<pv-name>
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-csi
+  annotations:
+    # Only storage backend in this cluster, so make it the default.
+    # Remove this annotation to require an explicit storageClassName on every PVC.
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: <NFS_PRIVATE_IP>
+  share: /data/nfs
+  # chmod the provisioned subdirectory so non-root containers can write.
+  # 0777 is permissive - tighten (e.g. 0770) if workloads share a known fsGroup.
+  mountPermissions: "0777"
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+mountOptions:
+  - nfsvers=4.1
+  - hard
+  - timeo=600
+  - retrans=2
+---
+# Same backend, but keeps data on the NFS server after the PVC is deleted.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-csi-retain
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: <NFS_PRIVATE_IP>
+  share: /data/nfs
+  mountPermissions: "0777"
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+mountOptions:
+  - nfsvers=4.1
+  - hard
+  - timeo=600
+  - retrans=2

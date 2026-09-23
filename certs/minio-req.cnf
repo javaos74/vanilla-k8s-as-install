@@ -1,0 +1,37 @@
+#---------------------------------------------------------------------
+# CSR + extensions for the MinIO server certificate, signed by the
+# "uipath" root CA (see uipath-ca-openssl.cnf).
+#
+#   openssl req -new -nodes -newkey rsa:4096 -keyout minio.key \
+#     -out minio.csr -config minio-req.cnf
+#   openssl x509 -req -in minio.csr -days 3650 -sha256 \
+#     -CA uipath-ca.crt -CAkey uipath-ca.key -CAcreateserial \
+#     -out minio.crt -extfile minio-req.cnf -extensions v3_req
+#---------------------------------------------------------------------
+[req]
+default_md         = sha256
+prompt             = no
+distinguished_name = dn
+req_extensions     = v3_req
+
+[dn]
+C  = KR
+O  = UiPath PreSales
+OU = Vanilla K8s
+CN = minio.myrobots.co.kr
+
+[v3_req]
+basicConstraints = critical, CA:FALSE
+keyUsage         = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName   = @alt_names
+
+[alt_names]
+# Apex plus virtual-hosted-style bucket names (<bucket>.<endpoint>), which
+# the AWS S3 SDK uses by default. The wildcard does not cover the apex.
+DNS.1 = minio.myrobots.co.kr
+DNS.2 = *.minio.myrobots.co.kr
+DNS.3 = uipath.minio.myrobots.co.kr
+DNS.4 = localhost
+IP.1  = <NFS_PRIVATE_IP>
+IP.2  = 127.0.0.1

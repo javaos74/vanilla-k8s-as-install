@@ -1,0 +1,89 @@
+# minio.myrobots.co.kr 테스트용 mc(mcli) 클라이언트 파드
+#
+# 사전 준비 (Secret 은 파일로 저장하지 않는다):
+#   ./setup.sh          # CA ConfigMap + minio-creds Secret 생성 후 이 매니페스트 적용
+#
+# 사용:
+#   kubectl -n minio-test exec -it deploy/mc-client -- mcli ls minio
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: minio-test
+---
+# MinIO 는 자체 서명 인증서(CN=minio.myrobots.co.kr)를 쓴다.
+# CA ConfigMap(minio-ca) / Secret(minio-creds) 은 setup.sh 가 만든다.
+#   - minio-ca   : minio-ca.crt  (myubuntu:/opt/minio/certs/public.crt)
+#   - minio-creds: username / password (myubuntu 의 minio 컨테이너 env 에서 추출)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mc-client
+  namespace: minio-test
+  labels:
+    app: mc-client
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mc-client
+  template:
+    metadata:
+      labels:
+        app: mc-client
+    spec:
+      containers:
+        - name: mc
+          image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+          imagePullPolicy: IfNotPresent
+          env:
+            # mc 는 argv[0] 로 설정 디렉터리를 정한다(mcli -> /root/.mcli).
+            # /root 는 쓰기 불가이므로 두 이름이 같은 디렉터리를 쓰도록 고정한다.
+            # CA 볼륨 마운트 덕에 /root/.mc 는 쓰기 가능하게 생성된다.
+            - name: MC_CONFIG_DIR
+              value: /root/.mc
+            - name: MC_URL
+              value: https://minio.myrobots.co.kr:9000
+            - name: MC_ALIAS
+              value: minio
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-creds
+                  key: username
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-creds
+                  key: password
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              # 패키지로 설치했을 때의 이름(mcli)으로도 부를 수 있게 심링크.
+              # /usr/bin 은 이 이미지에서 r-xr-xr-x 이고 CAP_DAC_OVERRIDE 를 drop 했으므로
+              # 쓰기 가능한 /usr/local/bin 에 만든다 (PATH 에 이미 포함).
+              ln -sf /usr/bin/mc /usr/local/bin/mcli
+              # alias 등록 (자격증명은 env -> ~/.mc/config.json 에만 존재)
+              mc alias set "$MC_ALIAS" "$MC_URL" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" > /dev/null
+              echo "alias '$MC_ALIAS' -> $MC_URL ready"
+              exec sleep infinity
+          volumeMounts:
+            - name: minio-ca
+              mountPath: /root/.mc/certs/CAs
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: minio-ca
+          configMap:
+            name: minio-ca

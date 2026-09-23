@@ -1,0 +1,41 @@
+#---------------------------------------------------------------------
+# Self-signed server certificate for MinIO on myubuntu (<NFS_PRIVATE_IP>)
+#
+# Adds virtual-hosted-style bucket names, which the AWS S3 SDK uses by
+# default for custom endpoints (<bucket>.<endpoint>). Without these the
+# TLS handshake fails with "no alternative certificate subject name
+# matches target hostname".
+#
+# The wildcard does NOT cover the apex, so both names are required.
+#
+# Generate (on myubuntu):
+#   openssl req -x509 -nodes -newkey rsa:4096 -sha256 -days 3650 \
+#     -keyout private.key -out public.crt \
+#     -config minio-openssl.cnf -extensions v3_req
+#---------------------------------------------------------------------
+[req]
+default_md         = sha256
+prompt             = no
+distinguished_name = dn
+req_extensions     = v3_req
+x509_extensions    = v3_req
+
+[dn]
+C  = KR
+O  = UiPath PreSales
+OU = Vanilla K8s
+CN = minio.myrobots.co.kr
+
+[v3_req]
+basicConstraints = critical, CA:FALSE
+keyUsage         = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName   = @alt_names
+
+[alt_names]
+DNS.1 = minio.myrobots.co.kr
+DNS.2 = *.minio.myrobots.co.kr
+DNS.3 = uipath.minio.myrobots.co.kr
+DNS.4 = localhost
+IP.1  = <NFS_PRIVATE_IP>
+IP.2  = 127.0.0.1

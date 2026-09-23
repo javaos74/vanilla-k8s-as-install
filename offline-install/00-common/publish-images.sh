@@ -18,7 +18,12 @@
 #   ./publish-images.sh --check          # 로컬 이미지 확인만 (푸시 없음)
 #   ./publish-images.sh --dry-run        # 실행할 명령만 출력
 #   ./publish-images.sh                  # 태깅 + 푸시
+#   ./publish-images.sh --only mssql-fts:2022-16.0.4255.1   # 대상 하나만
 #   PUBLISH_NAMESPACE=myorg ./publish-images.sh
+#
+# --only 가 필요한 이유: 게시 표의 원본 이미지들이 한 호스트에 다 있는 경우는
+# 드물다. 빌드 호스트마다 만든 것만 있다. 필터가 없으면 "로컬에 없는 이미지"
+# 검사에서 죽어 아무것도 올릴 수 없다.
 #
 # 전제: 이 호스트에 원본 이미지가 있고, `docker login` 이 끝나 있어야 한다.
 #       자격증명은 이 스크립트가 다루지 않는다(히스토리·로그에 남기지 않기 위해).
@@ -34,12 +39,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 MODE="push"
-case "${1:-}" in
-    --check)   MODE="check" ;;
-    --dry-run) MODE="dry-run" ;;
-    "")        MODE="push" ;;
-    *)         die "알 수 없는 인자: $1 (--check | --dry-run)" ;;
-esac
+ONLY=""
+while (($#)); do
+    case "$1" in
+        --check)   MODE="check" ;;
+        --dry-run) MODE="dry-run" ;;
+        --only)    shift; ONLY="${1:-}"
+                   [[ -n "$ONLY" ]] || die "--only 에 로컬 이미지 이름이 필요하다" ;;
+        *)         die "알 수 없는 인자: $1 (--check | --dry-run | --only <이미지>)" ;;
+    esac
+    shift
+done
 
 NAMESPACE="${PUBLISH_NAMESPACE:-${PUBLISH_NAMESPACE_DEFAULT}}"
 REGISTRY="${PUBLISH_REGISTRY:-docker.io}"
@@ -57,8 +67,24 @@ require_cmds docker
 #---------------------------------------------------------------------
 PUBLISH_TARGETS=(
     "mssql-fts:2022|mssql-fts|${MSSQL_FTS_TAGS}|yes"
+    "mssql-fts:2022-${MSSQL_CU25_VERSION}|mssql-fts|${MSSQL_CU25_FTS_TAGS}|yes"
     "postgresql:16|postgres-jammy|${POSTGRES_JAMMY_TAGS}|no"
 )
+
+# --only 로 대상을 하나만 고를 수 있다. 원본 이미지가 호스트마다 흩어져 있어서
+# 표 전체를 한 호스트에서 올릴 수 있는 경우가 드물다.
+if [[ -n "$ONLY" ]]; then
+    FILTERED=()
+    for entry in "${PUBLISH_TARGETS[@]}"; do
+        [[ "${entry%%|*}" == "$ONLY" ]] && FILTERED+=("$entry")
+    done
+    ((${#FILTERED[@]} > 0)) || die "$(cat <<MSG
+--only ${ONLY} 에 해당하는 대상이 게시 표에 없다. 가능한 값:
+$(printf '  %s\n' "${PUBLISH_TARGETS[@]%%|*}")
+MSG
+)"
+    PUBLISH_TARGETS=("${FILTERED[@]}")
+fi
 
 #=====================================================================
 # 1. 로컬 이미지 확인

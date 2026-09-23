@@ -12,36 +12,96 @@ Ubuntu 22.04 에어갭 노드에서 **판정 19/19 통과**를 확인했다(8절
 **`mcr.microsoft.com/mssql/server` 이미지에는 Full-Text Search 가 들어 있지 않다.**
 UiPath AS 는 FTS 를 요구하므로 공식 이미지로는 설치가 진행되지 않는다.
 
-그래서 공식 이미지에 `mssql-server-fts` 를 설치한 이미지를 만들어 레지스트리에
-올려 두고, 이 번들은 그것을 tar 로 담는다.
+공식 CU25 이미지를 그대로 띄워 물어본 결과다(실측).
+
+```
+  ISFULLTEXTINSTALLED | 0                                    <- 미설치
+  FTSSERVICEINSTALLED | 0                                    <- FTS 서비스 미탑재
+  FULLTEXTCATALOGS    | 0
+  FULLTEXTLANGUAGES   | 0
+  PRODUCTVERSION      | 16.0.4255.1  (RTM-CU25, KB5081477)
+  EDITION             | Developer Edition (64-bit)
+  PLATFORM            | Linux (Ubuntu 22.04.5 LTS) <X64>
+```
+
+그래서 공식 이미지에 `mssql-server-fts` 를 넣은 이미지를 만들어 레지스트리에
+올려 두고, 이 번들은 그것을 tar 로 담는다. 게시된 태그는 아래 넷이고 **전부 FTS
+포함이다**(8절에서 매니페스트 단위로 검증).
+
+| 태그 | 엔진 | 용도 |
+|---|---|---|
+| `2022-16.0.4265.3` / `2022` | CU26 | 기본. 번들이 참조한다 |
+| `2022-16.0.4255.1` / `2022-cu25` | CU25 | 현장이 CU25 로 고정된 경우 |
 
 ```
 docker.io/javaos74/mssql-fts:2022-16.0.4265.3
+docker.io/javaos74/mssql-fts:2022-cu25
 ```
 
-빌드 레시피는 이렇다. 빌드는 온라인 호스트에서 하고, 에어갭에는 `docker save`
-결과만 옮기므로 폐쇄망에서 문제가 되지 않는다.
+빌드 레시피는 **`fts-image/`** 에 있다. 빌드는 온라인 호스트에서 하고, 에어갭에는
+`docker save` 결과만 옮기므로 폐쇄망에서 문제가 되지 않는다.
+
+```bash
+cd fts-image
+./build-image.sh                        # 빌드 + 실기동 검증(기본: CU25)
+./verify-fts-image.sh <이미지> --smoke   # 이미지 하나만 따로 판정
+```
+
+`build-image.sh` 는 빌드 후 컨테이너를 띄워 `IsFullTextInstalled` 과 `CONTAINS`
+질의까지 확인하고, 엔진 버전과 FTS 패키지 버전이 같은지 **실행 결과로** 대조한다.
+어긋나면 게시하지 말라고 실패한다.
+
+### `apt-get install mssql-server-fts` 만 하면 안 되는 이유
+
+FTS 패키지의 의존이 느슨하다(실측).
+
+```
+Depends: mssql-server (>= 14.0.405.163-2)
+```
+
+게다가 공식 이미지의 엔진은 **deb 로 등록돼 있지 않다** — 베이스의 dpkg 목록에는
+`mssql-tools18` 하나뿐이다. 그래서 apt 는 의존이 미충족이라 보고 저장소의
+**최신** 엔진 deb 를 함께 끌어온다.
+
+```
+Inst mssql-server (16.0.4295.3-1 ...)      <- CU28. 베이스는 CU25다
+Inst mssql-server-fts (16.0.4255.1-8 ...)
+```
+
+결과는 두 가지다. **엔진이 조용히 올라가** "CU25 이미지"라는 전제가 깨지고,
+구워진 엔진을 덮어써도 베이스 레이어의 원본이 남아 **엔진이 두 번 들어간다.**
+
+| 방식 | 이미지 크기 | 엔진 버전 |
+|---|---|---|
+| 베이스(FTS 없음) | 2.31GB | 16.0.4255.1 |
+| `apt-get install mssql-server-fts` | **5.06GB** | **16.0.4295.3 으로 상승** |
+| FTS deb 만 설치 (현재 레시피) | **3.22GB** | 16.0.4255.1 유지 |
+
+그래서 엔진 deb 를 끌어오지 않고 FTS 패키지만 넣는다. 버전이 어긋날 여지가
+구조적으로 없어진다.
 
 ```dockerfile
-FROM mcr.microsoft.com/mssql/server:2022-latest
-ARG FTS_VERSION=16.0.4265.3-1
-USER root
-RUN apt-get update \
- && apt-get install -y --no-install-recommends curl gnupg ca-certificates \
- && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
-      | gpg --dearmor -o /usr/share/keyrings/microsoft.gpg \
- && echo "deb [signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/ubuntu/22.04/mssql-server-2022 jammy main" \
-      > /etc/apt/sources.list.d/mssql-server.list \
- && apt-get update \
- && apt-get install -y --no-install-recommends mssql-server-fts=${FTS_VERSION} \
- && apt-get purge -y curl gnupg && apt-get autoremove -y \
- && rm -rf /var/lib/apt/lists/*
-USER mssql
+apt-get download "mssql-server-fts=${MSSQL_PKG_VERSION}"
+apt-get purge -y --auto-remove curl gnupg2      # dpkg -i 앞에 둘 것
+dpkg -i --force-depends ./mssql-server-fts_*.deb
 ```
 
-게시는 `00-common/publish-images.sh` 로 한다. **본체와 FTS 의 버전이 반드시
-같아야 한다**(`16.0.4265.3-1`). 다르면 FTS 가 동작하지 않는다. 그래서 번들은
-태그가 아니라 **다이제스트로** 이미지를 받는다.
+`--force-depends` 이후에는 dpkg 상태에 미충족 의존이 남아 **모든 apt 조작이
+거부된다**(`E: Unmet dependencies`). 그래서 apt 가 필요한 정리는 `dpkg -i`
+**앞에서** 끝내야 한다. 순서가 바뀌면 빌드가 그 자리에서 실패한다.
+
+런타임에는 영향이 없다(검증: `IsFullTextInstalled=1`, `CONTAINS` 정상).
+
+### FTS 패키지 버전은 리비전까지 맞춘다
+
+CU25 는 `16.0.4255.1-1` 이 아니라 **`16.0.4255.1-8`** 이다. 추측하지 말고 볼 것.
+
+```bash
+apt-cache madison mssql-server-fts
+```
+
+게시는 `00-common/publish-images.sh` 로 한다. 번들은 태그가 아니라
+**다이제스트로** 이미지를 받는다.
 
 ---
 
@@ -243,6 +303,35 @@ collation=SQL_Latin1_General_CP1_CI_AS / IsFullTextInstalled=1
 `80-postgresql` 에도 있어 함께 고쳤다(그쪽은 컨테이너가 작아 우연히 통과하고
 있었다).
 
+### 이미지 단위 재검증 (2026-09-23)
+
+"이미지에 FTS 가 빠졌다"는 보고를 받아, **`javaos74/mssql-fts` 에 게시된 모든
+매니페스트**와 공식 이미지를 같은 잣대로 직접 띄워 확인했다.
+`fts-image/verify-fts-image.sh <이미지> --smoke` 의 출력이다.
+
+| 이미지 / 다이제스트 | 태그 | FTS 패키지 | IsFullTextInstalled | CONTAINS | ProductVersion |
+|---|---|---|---|---|---|
+| `mcr.../server:2022-CU25-ubuntu-22.04` (공식) | — | 없음 | **0** | — | 16.0.4255.1 (CU25) |
+| `sha256:22cefd4d…` (OCI 인덱스) | `2022`, `2022-16.0.4265.3` | `16.0.4265.3-1` | **1** | 통과 | 16.0.4265.3 (CU26) |
+| `sha256:6ef6c90c…` (위 인덱스의 amd64 자식, 번들이 핀한 값) | — | `16.0.4265.3-1` | **1** | 통과 | 16.0.4265.3 (CU26) |
+| `sha256:2fb0c59c…` (단일 매니페스트) | `2022-16.0.4255.1`, `2022-cu25` | `16.0.4255.1-8` | **1** | 통과 | 16.0.4255.1 (CU25) |
+
+**게시된 이미지는 전부 FTS 를 포함한다.** 위 표의 첫 줄이 현장에서 본 결과와
+같으므로(`0` / `0` / `16.0.4255.1`), 배포된 것은 커스텀 이미지가 아니라 공식 MCR
+이미지였다. 배포 매니페스트의 `image:` 값을 확인할 것.
+
+CU25 고정본(`2022-cu25`)은 이번에 새로 빌드해 게시했고, **로그인 기록이 없는
+호스트에서 다이제스트로 익명 pull 한 뒤** 같은 검증을 통과했다.
+
+`versions.env` 가 핀한 `sha256:6ef6c90c…` 가 Hub 태그 목록에 안 보이는 것은
+고아 매니페스트라서가 아니다. 태그 `2022-16.0.4265.3` 이 가리키는 것이 OCI
+인덱스이고 그 인덱스의 `linux/amd64` 자식이 이 값이다. 번들은
+`skopeo copy -> docker-archive` 로 단일 이미지를 받으므로 인덱스가 아니라
+플랫폼 단일 매니페스트를 핀하는 것이 맞다.
+
+floating 태그 `2022` 는 **일부러 건드리지 않았다.** 그 태그는 CU26 을 가리킨다.
+CU25 를 거기에 덮으면 `:2022` 를 받는 모든 곳이 조용히 CU25 로 내려앉는다.
+
 ---
 
 ## 9. 트러블슈팅
@@ -253,7 +342,8 @@ collation=SQL_Latin1_General_CP1_CI_AS / IsFullTextInstalled=1
 | `sqlcmd: command not found` | PATH 에 없다 | 5절. `/opt/mssql-tools18/bin/sqlcmd` |
 | `SSL Provider: certificate verify failed` | `mssql-tools18` 은 암호화 필수 | `-C` 추가 |
 | SQL 오류인데 판정이 통과 | `sqlcmd -b` 누락 | `-b` 를 주면 오류 시 0 이 아닌 종료코드 |
-| `IsFullTextInstalled=0` | FTS 없는 이미지 | 1절. 공식 이미지에는 FTS 가 없다 |
+| `IsFullTextInstalled=0` | FTS 없는 이미지 — 대개 **공식 MCR 이미지를 배포한 경우**다 | 1절. `fts-image/verify-fts-image.sh <이미지>` 로 어느 이미지인지 확인 |
+| `IsFullTextInstalled=1` 인데 FTS 가 안 먹는다 | 엔진과 FTS 패키지 버전 불일치 | 1절. `dpkg -l | grep mssql` 로 두 버전 대조 |
 | `CREATE FULLTEXT INDEX` 가 KEY INDEX 오류 | PK 제약 이름이 자동 생성됨 | 6절. `CONSTRAINT PK_docs` 처럼 이름 명시 |
 | `CONTAINS` 가 0건 | 인덱스 채우기가 비동기 | `FULLTEXTCATALOGPROPERTY(...,'PopulateStatus')` 대기 |
 | collation 이 다르다 | 최초 기동 시에만 적용된다 | 데이터 디렉터리를 비우고 재초기화 |

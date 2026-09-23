@@ -226,7 +226,6 @@ csi-nfs/                        csi-driver-nfs 매니페스트 + storageclass-nf
                                 + snapshotclass-nfs.yaml + snapshot/ (external-snapshotter)
 metrics-server/components.yaml  metrics-server (kubeadm용으로 패치됨)
 coredns/coredns-configmap.yaml  현재 Corefile
-coredns/coredns-configmap.bak.* 변경 이력 (003946=최초 원본, 004308=hosts만)
 backups/etcd-snapshot-*.db      etcd 스냅샷
 ```
 

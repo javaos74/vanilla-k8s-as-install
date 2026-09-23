@@ -404,6 +404,21 @@ CoreDNS 는 kubeadm 이 기본으로 control-plane 톨러레이션을 넣어 주
 
 추가 CP 에도 CNI 이미지를 적재해야 한다 — `60-cilium/README.md` 를 볼 것.
 
+**worker 조인까지 확인했다.** 기존 클러스터에 붙어 있던 노드를 `--reset` 후
+HA 클러스터의 LB 주소로 조인했다(10-k8s 24/24, 60-cilium `--role worker` 5/5).
+
+```
+3 CP (taint 유지)  +  1 worker (taint 없음)   전부 Ready
+톨러레이션 없는 파드 -> worker 에 스케줄됨 (10.244.3.16)
+cilium DaemonSet 4/4 · CoreDNS Running · airgap-fwd-other = 0
+```
+
+톨러레이션 없는 파드가 worker 로만 갔다는 것이 taint 정책이 의도대로 동작한다는
+증거다. CP 는 워크로드로부터 보호되고 일반 파드는 worker 로 간다.
+
+이 과정에서 docker 데몬 재시작이 같은 노드의 Harbor 를 깨뜨리는 것을 확인해
+경고와 조치를 넣었다(4.3절).
+
 ### 4.1 controlPlaneEndpoint 를 나중에 추가할 수 없는 이유
 
 `kubeadm init` 을 `--control-plane-endpoint` 없이 하면 kubeadm 은 **그 노드의
@@ -485,6 +500,34 @@ vrrp_instance k8s_api {
 - `virtual_router_id` 가 같은 L2 의 다른 VRRP 그룹과 겹치면 서로를 잡아먹는다.
 
 ### 4.3 worker 추가
+
+HA 클러스터에 worker 를 붙일 때는 **조인 주소가 LB** 여야 한다.
+`--print-join-command` 가 발급하는 명령이 이미 `controlPlaneEndpoint` 를 쓰므로
+그대로 넘기면 된다. 특정 CP 의 IP 로 조인하면 그 CP 가 죽을 때 worker 의
+kubelet 이 API 에 닿지 못한다.
+
+> **이미 docker 서비스가 돌고 있는 노드를 조인할 때 주의.**
+> 이 단계는 `containerd.io`/`docker-ce` 를 dpkg 로 넣는데, 같은 버전이어도
+> 패키지 재구성 과정에서 **docker 데몬이 재시작된다.** restart 정책이 붙은
+> 컨테이너가 일제히 다시 떠서, 기동 순서에 의존하는 스택은 깨질 수 있다.
+>
+> 실측: Harbor 가 있는 노드를 worker 로 조인했더니 nginx 가 죽었다.
+> ```
+> [emerg] host not found in upstream "core:8080"
+> ```
+> Harbor 는 `harbor.service`(`Type=oneshot`)로 harbor-log 를 먼저 띄우고 1514 를
+> 기다린 뒤 나머지를 올린다. 그런데 **데몬 재시작만으로는 그 유닛이 다시 돌지
+> 않아** 순서 보장이 적용되지 않는다. docker 의 `restart: always` 가 순서 없이
+> 올리면서 nginx 가 업스트림 이름을 해석하지 못하고 기동 단계에서 끝난다.
+>
+> 조치는 간단하다.
+> ```bash
+> sudo systemctl restart harbor.service
+> ```
+> `install.sh` 가 실행 중인 컨테이너를 감지해 이 경고를 먼저 출력한다.
+> 애초에 레지스트리는 클러스터 밖 별도 호스트에 두는 것이 안전하다.
+
+
 
 control plane 에서 조인 명령을 발급한다. 토큰 기본 수명은 24시간이다.
 
@@ -724,6 +767,8 @@ DNS 차단으로 인한 소음이 거슬리면 `--allow-dns` 를 쓴다. 이름�
 | `--certificate-key 형태가 잘못됐다` | 키가 잘려서 붙여졌다 | 32바이트 AES 키의 hex 이므로 정확히 64자여야 한다 |
 | CP 조인이 etcd 단계에서 멈춘다 | CP 간 2379/2380 이 막혀 있다 | stacked etcd 는 CP 끼리 이 포트로 통신한다. 방화벽/NSG 확인 |
 | CP 를 추가했는데 첫 CP 가 죽으면 같이 멈춘다 | `controlPlaneEndpoint` 없이 init 했다 | 4.1절. 사실상 재구축이 필요하다 |
+| 조인 후 그 노드의 docker 서비스가 죽었다 | deb 재구성으로 docker 데몬이 재시작돼 컨테이너가 순서 없이 일제히 떴다 | Harbor 라면 `sudo systemctl restart harbor.service`. 근거는 4.3절 |
+| Harbor nginx 가 `host not found in upstream "core:8080"` 으로 죽는다 | 위와 같은 원인. nginx 는 업스트림 이름을 못 찾으면 기동 단계에서 끝난다 | `systemctl restart harbor.service` 로 순서대로 다시 올린다 |
 | `kubectl` 이 `x509: certificate is valid for ..., not <LB주소>` | LB 주소가 apiserver 인증서 SAN 에 없다 | `--control-plane-endpoint` 를 주면 자동으로 들어간다. 이미 init 했다면 `--cert-san` 을 넣어 인증서 재발급 필요 |
 | LB 는 살아 있는데 모든 요청이 권한 오류 | LB 가 TLS 를 종료했다(L7 모드) | apiserver 는 클라이언트 인증서로 사용자를 식별한다. `mode tcp` 패스스루여야 한다 |
 | CP 1대를 reset 했더니 남은 CP 들이 쓰기 불가 | 유령 etcd 멤버가 남아 정족수를 잃었다 | 4.0.4절의 `etcdctl member remove` |

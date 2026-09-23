@@ -608,6 +608,32 @@ fi
 #=====================================================================
 step "deb 설치 ($(find "$DEB_DIR" -name '*.deb' | wc -l)개)"
 
+#---------------------------------------------------------------------
+# 이미 docker 워크로드가 돌고 있으면 경고한다
+#
+# 이 단계는 containerd.io / docker-ce 를 dpkg 로 넣는다. 같은 버전이어도
+# 패키지 재구성 과정에서 **docker 데몬이 재시작된다**. 그러면 restart 정책이
+# 붙은 컨테이너들이 일제히 다시 뜨고, 기동 순서에 의존하는 스택은 깨질 수 있다.
+#
+# 실측 사례: Harbor 가 있는 노드를 worker 로 조인했더니 docker 재시작으로
+# 컨테이너가 동시 기동되면서 nginx 가 죽었다.
+#   [emerg] host not found in upstream "core:8080"
+# Harbor 는 harbor.service(Type=oneshot)로 기동 순서를 잡는데, 데몬 재시작만으로는
+# 그 유닛이 다시 돌지 않아 순서 보장이 적용되지 않는다.
+# 조치: 설치 후 `sudo systemctl restart harbor.service`
+#---------------------------------------------------------------------
+if command -v docker >/dev/null 2>&1; then
+    RUNNING_CTRS="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c . || true)"
+    if [[ "${RUNNING_CTRS:-0}" -gt 0 ]]; then
+        warn "docker 컨테이너 ${RUNNING_CTRS}개가 실행 중이다."
+        warn "deb 재구성으로 docker 데몬이 재시작되면 이들도 함께 다시 뜬다."
+        log  "  기동 순서에 의존하는 스택(Harbor 등)은 설치 후 다시 올려야 할 수 있다:"
+        log  "    sudo systemctl restart harbor.service"
+        log  "  레지스트리는 클러스터 밖 별도 호스트에 두는 것을 권장한다."
+        docker ps --format '    {{.Names}}' 2>/dev/null | head -12 || true
+    fi
+fi
+
 # dpkg 로 한 번에 넣고 의존성 문제는 apt 로 정리한다(오프라인이라 다운로드 없음).
 dpkg -i "$DEB_DIR"/*.deb >/dev/null 2>&1 || {
     log "dpkg 1차 실패 -> 의존성 정리 시도"

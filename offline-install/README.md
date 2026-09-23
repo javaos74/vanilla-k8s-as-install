@@ -48,11 +48,14 @@ CNI 가 없으면 노드가 `NotReady` 이고 아무 워크로드도 스케줄�
 | `60-cilium` | CNI. 노드를 Ready 로 만든다 | 348M | 완료 (CP 9/9, worker 5/5) |
 | `50-nfs-csi` | NFS 서버 + csi-driver-nfs + StorageClass | 226M | 완료 (서버 11/11, CP 16/16, worker 6/6) |
 | `40-haproxy` | ingress L4 로드밸런서 | 45M | 완료 (11/11) |
-| `30-harbor` | 컨테이너 레지스트리 | — | 미착수 |
-| `20-minio` | S3 호환 오브젝트 스토리지 | — | 미착수 |
+| `30-harbor` | 컨테이너 레지스트리 | 697M | 완료 (26/26, 재부팅 후 9/9) |
+| `20-minio` | S3 호환 오브젝트 스토리지 | 86M | 완료 (23/23) |
+
+`30-harbor` 는 443 을 직접 점유하므로 `40-haproxy` 와 같은 노드에 둘 수 없다.
+레지스트리는 클러스터 밖 별도 호스트에 두는 것을 권장한다.
 
 MSSQL(FTS 포함) · PostgreSQL 은 커스텀 이미지를 공개 레지스트리에 올려 뒀다.
-자세한 내용은 `PROGRESS.md` 5절을 볼 것.
+공식 mssql 이미지에는 Full-Text Search 가 없어 직접 빌드해야 한다.
 
 ```
 docker.io/javaos74/mssql-fts:2022          SQL Server 2022 + Full-Text Search
@@ -131,7 +134,7 @@ worker 추가는 `10-k8s/README.md` 4.0절을 볼 것. control plane 에서 발�
   common.sh           공통 함수(로깅·판정·체크섬·이미지 적재)
   verify-urls.sh      업스트림 URL 생존 확인
   publish-images.sh   커스텀 이미지를 레지스트리에 게시
-10-k8s/ 40-haproxy/ 50-nfs-csi/ 60-cilium/
+10-k8s/ 20-minio/ 30-harbor/ 40-haproxy/ 50-nfs-csi/ 60-cilium/
   build-bundle.sh     빌드 호스트에서 실행
   install.sh          타깃에서 root 로 실행. 설치 + 판정
   README.md           설계 근거·트러블슈팅

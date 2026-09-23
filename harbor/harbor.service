@@ -1,5 +1,5 @@
 #---------------------------------------------------------------------
-# Harbor 자동 기동 유닛  (charles-harbor / 20.196.65.230)
+# Harbor 자동 기동 유닛  (레지스트리 호스트)
 #
 # 설치:
 #   sudo install -m 0644 harbor.service /etc/systemd/system/harbor.service

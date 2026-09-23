@@ -13,6 +13,18 @@ uipathctl
 # 리다이렉션 전 원본 로그
 *.orig
 
+# 실행 로그·진단 덤프. 재현에 쓸모가 없고 토큰·내부 호스트명이 섞인다
+*.log
+log-*.txt
+join-*.txt
+*-handshake.txt
+
+# 타임스탬프 백업 부산물 (coredns/ 의 의도적 변경이력은 예외로 추적한다)
+*.bak
+*.bak.[0-9]*
+*.bak.[0-9]*.yaml
+!coredns/coredns-configmap.bak.*.yaml
+
 # 에이전트 로컬 설정 — 실제 IP/인스턴스 ID 보유
 .kiro/
 

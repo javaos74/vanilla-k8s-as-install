@@ -11,7 +11,7 @@ UiPath Automation Suite 용 인프라를 구성한다.
 | 전제 | 노드가 인터넷 접근 가능 | 노드가 인터넷 접근 **불가** |
 | 패키지 | 노드에 apt 저장소 등록 후 직접 설치 | 번들의 deb 를 `dpkg -i` |
 | 이미지 | 노드가 레지스트리에서 pull | 번들의 tar 를 `ctr -n k8s.io images import` |
-| CNI | Flannel v0.28.9 | **Cilium 1.20.2** |
+| CNI | Cilium 1.20.2 (이 폴더의 매니페스트 재사용) | **Cilium 1.20.2** |
 | 검증 | 수동 | 단계별 판정 + nftables 에어갭 강제 |
 
 ---
@@ -72,9 +72,14 @@ CNI 가 없으면 노드가 `NotReady` 이고 아무 워크로드도 스케줄�
 AS 는 FTS 를 요구하므로 공식 이미지로는 설치가 진행되지 않는다.
 
 ```
-docker.io/javaos74/mssql-fts:2022          SQL Server 2022 + Full-Text Search
+docker.io/javaos74/mssql-fts:2022          SQL Server 2022 + Full-Text Search (CU26)
+docker.io/javaos74/mssql-fts:2022-cu25     같은 것의 CU25 고정본
 docker.io/javaos74/postgres-jammy:16.15    PostgreSQL 16 (jammy 기반, 대안)
 ```
+
+빌드 레시피와 이미지 단위 FTS 판정 스크립트는 `70-mssql/fts-image/` 에 있다.
+게시된 mssql 태그는 전부 FTS 포함이며 매니페스트 단위로 검증했다
+(`70-mssql/README.md` 8절).
 
 ---
 
@@ -156,6 +161,10 @@ worker 추가는 `10-k8s/README.md` 4.0절을 볼 것. control plane 에서 발�
   build-bundle.sh     빌드 호스트에서 실행
   install.sh          타깃에서 root 로 실행. 설치 + 판정
   README.md           설계 근거·트러블슈팅
+70-mssql/fts-image/
+  Dockerfile          SQL Server 2022 + FTS 이미지 레시피
+  build-image.sh      빌드 후 컨테이너를 띄워 FTS 까지 검증한다
+  verify-fts-image.sh 이미지 하나만 따로 FTS 판정 (--smoke 로 CONTAINS 질의)
 90-verify/
   airgap-on.sh        nftables 로 인터넷만 차단(사내망 RFC1918 은 허용)
   airgap-off.sh       해제 + 유출 카운터 판정

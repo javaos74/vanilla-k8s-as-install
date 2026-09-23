@@ -15,7 +15,7 @@ kubeadm 으로 구성한 바닐라 Kubernetes **v1.36.4** 와, 그 위에 UiPath
 | 패키지 출처 | `download.docker.com`, `pkgs.k8s.io` apt 저장소를 노드에 등록해 직접 설치 | 온라인 빌드 호스트에서 만든 **번들(tar.gz)** 을 옮겨서 설치 |
 | 컨테이너 이미지 | 노드가 레지스트리에서 pull | 번들의 tar 를 `ctr -n k8s.io images import` 로 적재 |
 | 노드 구성 | control plane 1 + worker 3 | 단일 노드 기준(+ worker 추가 지원) |
-| CNI | Flannel v0.28.9 | Cilium 1.20.2 |
+| CNI | Cilium 1.20.2 (매니페스트는 `offline-install/60-cilium/`) | Cilium 1.20.2 |
 | 진입점 | `prep-node.sh` → `kubeadm init --config kubeadm-init.yaml` | `offline-install/10-k8s/build-bundle.sh` → `install.sh` |
 | 검증 | 수동 | 단계별 판정 스크립트 + nftables 에어갭 강제 |
 
@@ -41,7 +41,8 @@ AWS `ap-northeast-2`, 프로파일 `uipath`, 계정 `<AWS_ACCOUNT_ID>`, VPC `<VP
 > 공개 저장소이므로 계정 번호, 리소스 ID, IP 주소는 `<PLACEHOLDER>` 형태로 치환되어 있다.
 > 매니페스트를 그대로 적용하기 전에 `PLACEHOLDERS.md`의 목록을 자신의 환경 값으로 바꿀 것.
 > 서버 호스트명도 고객 환경명을 제거하고 `k8s-cp` / `k8s-01~03` 으로 일반화했다.
-> 로그 파일(`init-cp.log`, `log-k8s-*.txt`, `join-k8s-*.txt`) 본문의 호스트명도 함께 치환했다.
+> 설치 당시의 실행 로그(`init-cp.log`, `log-k8s-*.txt`, `join-k8s-*.txt`)는
+> 재현에 쓸모가 없고 내부 호스트명만 남기므로 저장소에서 제외했다.
 
 ---
 
@@ -79,12 +80,18 @@ AWS `ap-northeast-2`, 프로파일 `uipath`, 계정 `<AWS_ACCOUNT_ID>`, VPC `<VP
 |---|---|---|
 | kubeadm / kubelet / kubectl | 1.36.4-1.1 | `apt-mark hold` 적용 |
 | containerd | 2.3.5 | Docker 저장소, `SystemdCgroup = true` |
-| CNI: Flannel | v0.28.9 | vxlan, Pod CIDR `10.244.0.0/16` |
+| CNI: Cilium | 1.20.2 | vxlan(UDP 8472), Pod CIDR `10.244.0.0/16` |
 | CSI: csi-driver-nfs | v4.13.4 | provisioner `nfs.csi.k8s.io` |
 | external-snapshotter | v8.6.0 | CRD + snapshot-controller |
 | metrics-server | v0.9.0 | `--kubelet-insecure-tls` 필요 |
 | CoreDNS | 1.14.2 | hosts + template 커스터마이즈 |
 | SQL Server | 2022 (16.0.4255.1) | CP에만, AMI 기본 포함 |
+
+CNI 는 **Cilium 하나로 통일**했다. 초기 구축은 Flannel 로 했으나 오프라인 경로와
+CNI 를 이원화할 이유가 없어 Flannel 매니페스트는 저장소에서 제거했다.
+`kubeadm-init.yaml` 의 `podSubnet` 이 `offline-install` 의 `POD_CIDR` 과 같은
+`10.244.0.0/16` 이므로 온라인 설치에서도 `offline-install/60-cilium/` 의
+Helm values 를 그대로 쓸 수 있다(차이는 이미지를 pull 하는지 번들에서 적재하는지뿐).
 
 ### 네트워크 대역
 - Pod CIDR `10.244.0.0/16` — VPC(172.31.0.0/16)와 충돌 회피 목적으로 선택
@@ -215,10 +222,6 @@ CP는 EIP 덕분에 주소가 그대로이므로 맥의 kubeconfig를 손댈 필
 ```
 prep-node.sh                    노드 준비 스크립트 (멱등, 노드 추가 시 재사용)
 kubeadm-init.yaml               kubeadm ClusterConfiguration (certSANs 포함)
-kube-flannel.yml                Flannel v0.28.9
-init-cp.log                     kubeadm init 로그
-log-k8s-*.txt            노드별 준비 로그
-join-k8s-*.txt           워커 조인 로그
 csi-nfs/                        csi-driver-nfs 매니페스트 + storageclass-nfs.yaml
                                 + snapshotclass-nfs.yaml + snapshot/ (external-snapshotter)
 metrics-server/components.yaml  metrics-server (kubeadm용으로 패치됨)

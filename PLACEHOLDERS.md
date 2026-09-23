@@ -48,4 +48,6 @@
 - `backups/*.db` — etcd 스냅샷. 클러스터의 모든 Secret이 평문으로 들어있다
 - `uipathctl` — 116MB 바이너리
 - `*.key`, `*.pem`, `*.env` — 개인키 및 자격증명
-- `init-cp.log`의 bootstrap token과 `--certificate-key` 값은 `<REDACTED-...>`로 마스킹
+- 설치 실행 로그(`init-cp.log`, `log-k8s-*.txt`, `join-k8s-*.txt`) — bootstrap token 과
+  `--certificate-key`, CA 해시, 내부 호스트명이 섞여 있고 재현에는 쓸모가 없다
+- `certs/harbor/harbor-handshake.txt` — `openssl s_client` 덤프. 진단 흔적

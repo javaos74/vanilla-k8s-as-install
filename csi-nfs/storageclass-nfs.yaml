@@ -1,5 +1,5 @@
 ---
-# Dynamic provisioning against the NFS export on myubuntu (<NFS_PRIVATE_IP>:/data/nfs).
+# Dynamic provisioning against the NFS export on infra-01 (<NFS_PRIVATE_IP>:/data/nfs).
 # Each PVC becomes a subdirectory under the export: /data/nfs/<pvc-namespace>-<pvc-name>-<pv-name>
 apiVersion: storage.k8s.io/v1
 kind: StorageClass

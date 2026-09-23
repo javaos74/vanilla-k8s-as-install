@@ -155,7 +155,7 @@ System.ArgumentException: Storage type 'Minio' is invalid  for download plugins
   사용했고 작업 후 `{"AppSettings":{}}`로 되돌렸다. Orchestrator appSettings를 self-heal에
   되돌려지지 않게 오버라이드해야 할 때 쓸 수 있는 지점이다.
   변경 명령: `uipathctl config orchestrator update-config --app-settings <file>`
-- 작업 중 사용한 파일은 myubuntu `~/as.2510.3/`에 남아 있다:
+- 작업 중 사용한 파일은 infra-01 `~/as.2510.3/`에 남아 있다:
   `appsettings.custom.json`(Amazon+EndpointRegion), `appsettings.minio.json`(Minio 타입),
   `appsettings.empty.json`(원복용), `appsettings.custom.json.real`
 - MinIO 인증서가 2026-09-17 00:31 UTC에 재발급되어 있었다(이 작업과 무관). 이 때문에

@@ -13,8 +13,8 @@ metadata:
 ---
 # MinIO 는 자체 서명 인증서(CN=minio.myrobots.co.kr)를 쓴다.
 # CA ConfigMap(minio-ca) / Secret(minio-creds) 은 setup.sh 가 만든다.
-#   - minio-ca   : minio-ca.crt  (myubuntu:/opt/minio/certs/public.crt)
-#   - minio-creds: username / password (myubuntu 의 minio 컨테이너 env 에서 추출)
+#   - minio-ca   : minio-ca.crt  (infra-01:/opt/minio/certs/public.crt)
+#   - minio-creds: username / password (infra-01 의 minio 컨테이너 env 에서 추출)
 apiVersion: apps/v1
 kind: Deployment
 metadata:

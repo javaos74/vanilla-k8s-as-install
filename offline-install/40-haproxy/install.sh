@@ -120,10 +120,16 @@ do_restart_test() {
     log "호스트에서 컨테이너 PID ${pid} 에 SIGKILL"
     kill -9 "$pid" || die "kill 실패"
 
-    if retry_until 60 bash -c "[[ \$(docker inspect -f '{{.State.Status}}' '${CONTAINER}' 2>/dev/null) == running ]]"; then
+    # RestartCount 가 늘어나는 것을 기다린다. status == running 을 기다리면 안 된다.
+    # kill 직후에는 docker 가 아직 죽음을 인지하지 못해 status 가 그대로 running 이고,
+    # 그러면 retry_until 이 첫 폴링에서 즉시 통과한 뒤 RestartCount=0 을 읽어
+    # 거짓 실패가 된다. 컨테이너가 클수록(예: SQL Server) 이 경쟁에서 지기 쉽다.
+    # 실측: mssql 은 이 이유로 실패했고 haproxy 는 우연히 통과했다.
+    if retry_until 180 bash -c "
+        rc=\$(docker inspect -f '{{.RestartCount}}' '${CONTAINER}' 2>/dev/null || echo 0)
+        st=\$(docker inspect -f '{{.State.Status}}' '${CONTAINER}' 2>/dev/null || echo none)
+        [[ \"\$rc\" -gt ${before} && \"\$st\" == running ]]"; then
         after="$(docker inspect -f '{{.RestartCount}}' "$CONTAINER")"
-        [[ "$after" != "$before" ]] \
-            || die "상태는 running 이지만 RestartCount 가 늘지 않았다(${before}). 재확인 필요."
         ok "프로세스 사고사 후 자동 복구 (RestartCount ${before} -> ${after})"
     else
         die "자동 복구되지 않았다. 재시작 정책을 확인할 것."

@@ -11,7 +11,7 @@ data:
            lameduck 5s
         }
         ready
-        # Wildcard *.k8s.myrobots.co.kr -> <NFS_PRIVATE_IP> (myubuntu).
+        # Wildcard *.k8s.myrobots.co.kr -> <NFS_PRIVATE_IP> (infra-01).
         # The 'hosts' plugin cannot do wildcards, so 'template' synthesises the A record.
         # The regex requires a label before "k8s", so the apex k8s.myrobots.co.kr
         # does NOT match here and is served by the 'hosts' block below instead.
@@ -28,7 +28,7 @@ data:
            rcode NOERROR
            authority "k8s.myrobots.co.kr. 60 IN SOA ns.k8s.myrobots.co.kr. hostmaster.k8s.myrobots.co.kr. 1 60 60 60 60"
         }
-        # Static single-name overrides, also pointing at myubuntu (<NFS_PRIVATE_IP>).
+        # Static single-name overrides, also pointing at infra-01 (<NFS_PRIVATE_IP>).
         # 'fallthrough' is required: without it every unmatched name would NXDOMAIN
         # here instead of continuing on to the kubernetes and forward plugins.
         hosts {

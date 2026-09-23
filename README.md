@@ -53,10 +53,10 @@ AWS `ap-northeast-2`, 프로파일 `uipath`, 계정 `<AWS_ACCOUNT_ID>`, VPC `<VP
 | K8S-01 | `<WORKER01_INSTANCE_ID>` | <WORKER01_PRIVATE_IP> | 동적 | worker |
 | K8S-02 | `<WORKER02_INSTANCE_ID>` | <WORKER02_PRIVATE_IP> | 동적 | worker |
 | K8S-03 | `<WORKER03_INSTANCE_ID>` | <WORKER03_PRIVATE_IP> | 동적 | worker |
-| myubuntu | `<NFS_INSTANCE_ID>` | <NFS_PRIVATE_IP> | 동적 | NFS 서버 (`/data/nfs`) |
+| infra-01 | `<NFS_INSTANCE_ID>` | <NFS_PRIVATE_IP> | 동적 | NFS 서버 (`/data/nfs`) |
 
 - 노드 4대: Ubuntu 22.04.5 LTS, m6i.2xlarge (8 vCPU / 31.5GB), 루트 EBS 128GB
-- myubuntu: Ubuntu 24.04.4 LTS, t3.2xlarge, 루트 150GB + 데이터 500GB (`<NFS_DATA_VOLUME_ID>`, `DeleteOnTermination: false`)
+- infra-01: Ubuntu 24.04.4 LTS, t3.2xlarge, 루트 150GB + 데이터 500GB (`<NFS_DATA_VOLUME_ID>`, `DeleteOnTermination: false`)
 - SSH: `ssh -i ~/.ssh/charles-vanilla.pem ubuntu@<IP>`
 - **사설 IP는 stop/start 후에도 유지됨.** 클러스터 설정 전체가 사설 IP 기준이라 재시작에 안전.
 
@@ -137,7 +137,7 @@ hosts {                                   # 개별 이름
 |---|---|---|
 | iMac Studio | `https://<CP_PUBLIC_IP>:6443` | `k8s` |
 | K8S-CP | `https://<CP_PRIVATE_IP>:6443` | `k8s` |
-| myubuntu | `https://<CP_PRIVATE_IP>:6443` | `k8s` |
+| infra-01 | `https://<CP_PRIVATE_IP>:6443` | `k8s` |
 
 - 맥의 기존 컨텍스트(`charles-aks-admin`, `docker-desktop`, `kind-local`)는 보존. `kubectl config use-context`로 전환
 - 전부 `cluster-admin` 권한. TLS 완전 검증(`insecure-skip-tls-verify` 미사용)
@@ -152,8 +152,8 @@ hosts {                                   # 개별 이름
 **순서가 중요하다.** NFS 서버가 클라이언트보다 나중에 죽고 먼저 살아야 한다. StorageClass에 `hard` 옵션이 있어 서버가 먼저 사라지면 마운트를 가진 노드의 I/O가 무한 대기한다.
 
 ```
-중지: 워커 01~03 (동시)  →  CP  →  myubuntu
-시작: myubuntu  →  CP  →  워커 01~03
+중지: 워커 01~03 (동시)  →  CP  →  infra-01
+시작: infra-01  →  CP  →  워커 01~03
 ```
 
 `drain` / `cordon`은 불필요 — 전체를 내리는 상황에서 파드를 다른 노드로 밀어내는 것은 무의미하다.
@@ -174,13 +174,13 @@ kubectl -n kube-system exec etcd-k8s-cp -- etcdutl \
 ```
 
 CP는 EC2 stop 전에 서비스를 정상 종료: `sudo systemctl stop mssql-server` → `sudo systemctl stop kubelet` → `sudo sync`
-myubuntu는: `sudo exportfs -ua` → `sudo systemctl stop nfs-server` → `sudo sync`
+infra-01는: `sudo exportfs -ua` → `sudo systemctl stop nfs-server` → `sudo sync`
 
 ### 재시작 시 확인
 
-`kubelet`, `containerd`(4대), `nfs-server`/`rpcbind`(myubuntu), `mssql-server`(CP) 모두 `enabled`이므로 자동 복구된다.
-myubuntu의 `/data`는 fstab에 **UUID + `nofail`**로 등록되어 자동 마운트된다 (수동 마운트였다면 `/data/nfs`가 빈 디렉터리로 올라와 모든 PV가 깨졌을 것).
-CP는 EIP 덕분에 주소가 그대로이므로 맥의 kubeconfig를 손댈 필요가 없다. 워커 3대와 myubuntu는 퍼블릭 IP가 바뀌지만 클러스터 동작에는 영향이 없다(SSH 접속용으로만 쓰임).
+`kubelet`, `containerd`(4대), `nfs-server`/`rpcbind`(infra-01), `mssql-server`(CP) 모두 `enabled`이므로 자동 복구된다.
+infra-01의 `/data`는 fstab에 **UUID + `nofail`**로 등록되어 자동 마운트된다 (수동 마운트였다면 `/data/nfs`가 빈 디렉터리로 올라와 모든 PV가 깨졌을 것).
+CP는 EIP 덕분에 주소가 그대로이므로 맥의 kubeconfig를 손댈 필요가 없다. 워커 3대와 infra-01는 퍼블릭 IP가 바뀌지만 클러스터 동작에는 영향이 없다(SSH 접속용으로만 쓰임).
 
 ---
 
@@ -199,7 +199,7 @@ CP는 EIP 덕분에 주소가 그대로이므로 맥의 kubeconfig를 손댈 필
 
 - **SQL Server `sa` 비밀번호 불명.** 계정 자체는 정상(오류 코드 `18456 State 8` = 비밀번호 불일치, 즉 존재+활성). AMI가 EULA만 수락한 상태로 빌드되어 비밀번호가 디스크에 없음 — `/var/opt/mssql/secrets/`에는 `machine-key`뿐, cloud-init user-data / bash history / systemd 환경변수 모두 비어 있음. 재설정: `sudo systemctl stop mssql-server && sudo /opt/mssql/bin/mssql-conf set-sa-password`
 - **단일 컨트롤 플레인.** HA 아님. etcd도 단일 멤버 → 스냅샷 백업이 유일한 복구 수단
-- **NFS 서버 단일 장애점.** myubuntu가 죽으면 모든 PV가 멈춤. `Scheduled-for-Deletion: 2026-09-06` 태그가 여전히 붙어 있음 — 계속 사용하려면 정리 필요
+- **NFS 서버 단일 장애점.** infra-01가 죽으면 모든 PV가 멈춤. `Scheduled-for-Deletion: 2026-09-06` 태그가 여전히 붙어 있음 — 계속 사용하려면 정리 필요
 - `mountPermissions: "0777"`은 권한이 넓다. 워크로드의 `fsGroup`이 정해지면 `0770` 등으로 축소 권장
 - `Released` 상태 PV가 누적된다 (prereq의 `nfs-csi-retain` 사용분). PVC 삭제 후에도 PV와 `/data/nfs` 하위 디렉터리가 남음
 - `*.k8s.myrobots.co.kr` 하위 이름을 나중에 클러스터 내부 Service로 옮기면, `template`이 `kubernetes` 플러그인보다 먼저 실행되어 계속 <NFS_PRIVATE_IP>으로 간다. 예외 처리 필요
@@ -233,8 +233,8 @@ CP의 `~/csi-nfs/`에도 CSI 매니페스트가 복제되어 있다.
 ### 최신 etcd 스냅샷
 
 `etcd-snapshot-20260917-015352.db` — 2,984 keys / revision 26594 / hash `2cc8d41a` / 20MB
-보관 3중: 맥 `~/k8s-vanilla/backups/`, CP `/var/lib/etcd/`, myubuntu `/data/backups/`
-(myubuntu의 500GB 볼륨은 `DeleteOnTermination: false`이므로 인스턴스 종료 후에도 잔존)
+보관 3중: 맥 `~/k8s-vanilla/backups/`, CP `/var/lib/etcd/`, infra-01 `/data/backups/`
+(infra-01의 500GB 볼륨은 `DeleteOnTermination: false`이므로 인스턴스 종료 후에도 잔존)
 
 ---
 

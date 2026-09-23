@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # minio.myrobots.co.kr 테스트용 mc(mcli) 클라이언트 배포 (멱등)
 #
-#   - CA ConfigMap  : myubuntu:/opt/minio/certs/public.crt
-#   - Secret        : myubuntu 의 minio 컨테이너 env(MINIO_ROOT_USER/PASSWORD)
+#   - CA ConfigMap  : infra-01:/opt/minio/certs/public.crt
+#   - Secret        : infra-01 의 minio 컨테이너 env(MINIO_ROOT_USER/PASSWORD)
 #     자격증명은 로컬 디스크에 저장되지 않고 SSH -> kubectl 로 바로 전달된다.
 set -euo pipefail
 
 NS=minio-test
 KEY="${KEY:-$HOME/.ssh/charles-vanilla.pem}"
-MYUBUNTU="${MYUBUNTU:-<NFS_PUBLIC_IP>}"   # myubuntu 퍼블릭 IP (재시작 시 변동)
+MYUBUNTU="${MYUBUNTU:-<NFS_PUBLIC_IP>}"   # infra-01 퍼블릭 IP (재시작 시 변동)
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 echo "==> namespace"

@@ -7,7 +7,7 @@ data:
            lameduck 5s
         }
         ready
-        # Static in-cluster overrides pointing at myubuntu (<NFS_PRIVATE_IP>).
+        # Static in-cluster overrides pointing at infra-01 (<NFS_PRIVATE_IP>).
         # 'fallthrough' is required: without it every unmatched name would NXDOMAIN
         # here instead of continuing on to the kubernetes and forward plugins.
         hosts {
@@ -37,7 +37,7 @@ kind: ConfigMap
 metadata:
   annotations:
     kubectl.kubernetes.io/last-applied-configuration: |
-      {"apiVersion":"v1","data":{"Corefile":".:53 {\n    errors\n    health {\n       lameduck 5s\n    }\n    ready\n    # Static in-cluster overrides pointing at myubuntu (<NFS_PRIVATE_IP>).\n    # 'fallthrough' is required: without it every unmatched name would NXDOMAIN\n    # here instead of continuing on to the kubernetes and forward plugins.\n    hosts {\n       <NFS_PRIVATE_IP> k8s.myrobots.co.kr\n       <NFS_PRIVATE_IP> minio.myrobots.co.kr\n       ttl 60\n       fallthrough\n    }\n    kubernetes cluster.local in-addr.arpa ip6.arpa {\n       pods insecure\n       fallthrough in-addr.arpa ip6.arpa\n       ttl 30\n    }\n    prometheus :9153\n    forward . /etc/resolv.conf {\n       max_concurrent 1000\n    }\n    cache 30 {\n       disable success cluster.local\n       disable denial cluster.local\n    }\n    loop\n    reload\n    loadbalance\n}\n"},"kind":"ConfigMap","metadata":{"annotations":{},"name":"coredns","namespace":"kube-system"}}
+      {"apiVersion":"v1","data":{"Corefile":".:53 {\n    errors\n    health {\n       lameduck 5s\n    }\n    ready\n    # Static in-cluster overrides pointing at infra-01 (<NFS_PRIVATE_IP>).\n    # 'fallthrough' is required: without it every unmatched name would NXDOMAIN\n    # here instead of continuing on to the kubernetes and forward plugins.\n    hosts {\n       <NFS_PRIVATE_IP> k8s.myrobots.co.kr\n       <NFS_PRIVATE_IP> minio.myrobots.co.kr\n       ttl 60\n       fallthrough\n    }\n    kubernetes cluster.local in-addr.arpa ip6.arpa {\n       pods insecure\n       fallthrough in-addr.arpa ip6.arpa\n       ttl 30\n    }\n    prometheus :9153\n    forward . /etc/resolv.conf {\n       max_concurrent 1000\n    }\n    cache 30 {\n       disable success cluster.local\n       disable denial cluster.local\n    }\n    loop\n    reload\n    loadbalance\n}\n"},"kind":"ConfigMap","metadata":{"annotations":{},"name":"coredns","namespace":"kube-system"}}
   creationTimestamp: "2026-09-16T14:59:17Z"
   name: coredns
   namespace: kube-system

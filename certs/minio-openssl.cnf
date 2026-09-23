@@ -1,5 +1,5 @@
 #---------------------------------------------------------------------
-# Self-signed server certificate for MinIO on myubuntu (<NFS_PRIVATE_IP>)
+# Self-signed server certificate for MinIO on infra-01 (<NFS_PRIVATE_IP>)
 #
 # Adds virtual-hosted-style bucket names, which the AWS S3 SDK uses by
 # default for custom endpoints (<bucket>.<endpoint>). Without these the
@@ -8,7 +8,7 @@
 #
 # The wildcard does NOT cover the apex, so both names are required.
 #
-# Generate (on myubuntu):
+# Generate (on infra-01):
 #   openssl req -x509 -nodes -newkey rsa:4096 -sha256 -days 3650 \
 #     -keyout private.key -out public.crt \
 #     -config minio-openssl.cnf -extensions v3_req

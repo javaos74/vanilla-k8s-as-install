@@ -35,7 +35,8 @@ UiPath Automation Suite 용 인프라를 구성한다.
 ## 2. 적용 순서 — 번호순이 아니다
 
 ```
-10-k8s  →  60-cilium  →  50-nfs-csi  →  40-haproxy  →  [30-harbor]  →  [20-minio]
+10-k8s  →  60-cilium  →  50-nfs-csi  →  40-haproxy  →  30-harbor  →  20-minio
+                                                      70-mssql · 80-postgresql (독립)
 ```
 
 CNI 가 없으면 노드가 `NotReady` 이고 아무 워크로드도 스케줄되지 않는다. 그래서
@@ -50,16 +51,22 @@ CNI 가 없으면 노드가 `NotReady` 이고 아무 워크로드도 스케줄�
 | `40-haproxy` | ingress L4 로드밸런서 | 45M | 완료 (11/11) |
 | `30-harbor` | 컨테이너 레지스트리 | 697M | 완료 (26/26, 재부팅 후 9/9) |
 | `20-minio` | S3 호환 오브젝트 스토리지 | 86M | 완료 (23/23) |
+| `70-mssql` | SQL Server 2022 + Full-Text Search | 1.3G | 완료 (19/19) |
+| `80-postgresql` | PostgreSQL 16 (TLS) | 145M | 완료 (25/25) |
 
 `30-harbor` 는 443 을 직접 점유하므로 `40-haproxy` 와 같은 노드에 둘 수 없다.
 레지스트리는 클러스터 밖 별도 호스트에 두는 것을 권장한다.
 
-MSSQL(FTS 포함) · PostgreSQL 은 커스텀 이미지를 공개 레지스트리에 올려 뒀다.
-공식 mssql 이미지에는 Full-Text Search 가 없어 직접 빌드해야 한다.
+`70-mssql` 과 `80-postgresql` 은 k8s 에 올리지 않는다. UiPath AS 는 외부 DB 를
+전제로 하며, 클러스터 장애가 DB 까지 끌고 가지 않도록 분리하는 것이 안전하다.
+두 단계는 다른 단계와 순서 의존이 없다.
+
+공식 mssql 이미지에는 **Full-Text Search 가 없어** 직접 빌드한 이미지를 쓴다.
+AS 는 FTS 를 요구하므로 공식 이미지로는 설치가 진행되지 않는다.
 
 ```
 docker.io/javaos74/mssql-fts:2022          SQL Server 2022 + Full-Text Search
-docker.io/javaos74/postgres-jammy:16.15    PostgreSQL 16 (Ubuntu 22.04 기반)
+docker.io/javaos74/postgres-jammy:16.15    PostgreSQL 16 (jammy 기반, 대안)
 ```
 
 ---
@@ -135,6 +142,7 @@ worker 추가는 `10-k8s/README.md` 4.0절을 볼 것. control plane 에서 발�
   verify-urls.sh      업스트림 URL 생존 확인
   publish-images.sh   커스텀 이미지를 레지스트리에 게시
 10-k8s/ 20-minio/ 30-harbor/ 40-haproxy/ 50-nfs-csi/ 60-cilium/
+70-mssql/ 80-postgresql/
   build-bundle.sh     빌드 호스트에서 실행
   install.sh          타깃에서 root 로 실행. 설치 + 판정
   README.md           설계 근거·트러블슈팅

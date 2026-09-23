@@ -13,7 +13,7 @@
 | `<SG_RULE_ID_6443>` | 6443 인바운드 규칙 ID |
 | `<CP_INSTANCE_ID>` | control plane 인스턴스 |
 | `<WORKER01_INSTANCE_ID>` ~ `<WORKER03_INSTANCE_ID>` | 워커 인스턴스 |
-| `<NFS_INSTANCE_ID>` | NFS/MinIO 서버(myubuntu) 인스턴스 |
+| `<NFS_INSTANCE_ID>` | NFS/MinIO 서버(infra-01) 인스턴스 |
 | `<NFS_DATA_VOLUME_ID>` | NFS 데이터용 500GB EBS (`DeleteOnTermination: false`) |
 | `<OTHER_EIP_1>` ~ `<OTHER_EIP_3>` | 같은 계정의 무관한 EIP (재사용 금지 대상) |
 | `<CP_EIP_ALLOCATION_ID>` | CP 에 붙인 EIP 의 할당 ID (`eipalloc-...`) |
@@ -24,7 +24,7 @@
 |---|---|
 | `<CP_PRIVATE_IP>` | K8S-CP — apiserver 주소, etcd |
 | `<WORKER01_PRIVATE_IP>` ~ `<WORKER03_PRIVATE_IP>` | K8S-01~03 |
-| `<NFS_PRIVATE_IP>` | myubuntu — NFS export, MinIO, CoreDNS 응답 대상 |
+| `<NFS_PRIVATE_IP>` | infra-01 — NFS export, MinIO, CoreDNS 응답 대상 |
 
 ## 퍼블릭 IP / DNS
 
@@ -40,7 +40,7 @@
 ## 치환하지 않은 값
 
 - Pod CIDR `10.244.0.0/16`, Service CIDR `10.96.0.0/12`, VPC CIDR `172.31.0.0/16`
-- 노드 호스트명 `k8s-cp`, `k8s-01~03`, `myubuntu`
+- 노드 호스트명 `k8s-cp`, `k8s-01~03`, `infra-01`
 - 도메인 `k8s.myrobots.co.kr`, `minio.myrobots.co.kr`, `harbor.myrobots.co.kr`
 
 ## 저장소에 포함하지 않은 것

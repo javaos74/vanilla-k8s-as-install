@@ -8,14 +8,14 @@ set -euo pipefail
 
 NS=minio-test
 KEY="${KEY:-$HOME/.ssh/charles-vanilla.pem}"
-MYUBUNTU="${MYUBUNTU:-<NFS_PUBLIC_IP>}"   # infra-01 퍼블릭 IP (재시작 시 변동)
+INFRA_HOST="${INFRA_HOST:-<NFS_PUBLIC_IP>}"   # infra-01 퍼블릭 IP (재시작 시 변동)
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 echo "==> namespace"
 kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
 
 echo "==> CA 인증서 가져오기"
-ssh -i "$KEY" -o StrictHostKeyChecking=accept-new "ubuntu@$MYUBUNTU" \
+ssh -i "$KEY" -o StrictHostKeyChecking=accept-new "ubuntu@$INFRA_HOST" \
   'sudo cat /opt/minio/certs/public.crt' > "$HERE/minio-ca.crt"
 openssl x509 -in "$HERE/minio-ca.crt" -noout -subject
 
@@ -25,7 +25,7 @@ kubectl -n "$NS" create configmap minio-ca \
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo "==> 자격증명 Secret (값은 출력하지 않음)"
-ssh -i "$KEY" "ubuntu@$MYUBUNTU" 'bash -s' <<'EOS' | kubectl apply -f -
+ssh -i "$KEY" "ubuntu@$INFRA_HOST" 'bash -s' <<'EOS' | kubectl apply -f -
 set -euo pipefail
 env_of() { sudo docker inspect minio --format "{{range .Config.Env}}{{println .}}{{end}}" \
              | grep "^$1=" | head -1 | cut -d= -f2-; }

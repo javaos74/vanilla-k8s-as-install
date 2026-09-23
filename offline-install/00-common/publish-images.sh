@@ -91,7 +91,7 @@ if ((${#MISSING[@]} > 0)); then
 로컬에 없는 이미지: ${MISSING[*]}
 
 이 스크립트는 이미지를 빌드하지 않는다. 원본이 있는 호스트에서 실행할 것.
-현재 원본 보유 호스트: infra-01 (AWS profile=uipath, <AWS_MYUBUNTU_PUBLIC_IP>)
+현재 원본 보유 호스트: infra-01 (AWS profile=uipath, <AWS_INFRA_HOST_PUBLIC_IP>)
 빌드 레시피는 PROGRESS.md 5절에 있다.
 MSG
 )"

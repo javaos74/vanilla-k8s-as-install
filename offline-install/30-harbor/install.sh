@@ -332,7 +332,16 @@ fi
 #=====================================================================
 step "TLS 인증서"
 
-if [[ -f "${CERT_DIR}/harbor.crt" && -f "${CERT_DIR}/harbor.key" ]]; then
+# 05-certs 로 발급한 사내 CA 인증서가 있으면 그것을 쓴다.
+PKI_HARBOR="${PKI_DIR:-/opt/pki}/harbor"
+if [[ -f "${PKI_HARBOR}/harbor.crt" && -f "${PKI_HARBOR}/harbor.key" ]]; then
+    install -m 0644 "${PKI_HARBOR}/harbor.crt" "${CERT_DIR}/harbor.crt"
+    install -m 0600 "${PKI_HARBOR}/harbor.key" "${CERT_DIR}/harbor.key"
+    # docker 신뢰에는 서버 인증서가 아니라 **CA** 를 넣어야 한다.
+    # 서버 인증서를 ca.crt 로 두면 갱신할 때마다 모든 노드를 고쳐야 한다.
+    [[ -f "${PKI_HARBOR}/ca.crt" ]] && install -m 0644 "${PKI_HARBOR}/ca.crt" "${CERT_DIR}/ca.crt"
+    ok "사내 CA 발급 인증서 사용 (${PKI_HARBOR})"
+elif [[ -f "${CERT_DIR}/harbor.crt" && -f "${CERT_DIR}/harbor.key" ]]; then
     ok "기존 인증서 사용 (만료: $(openssl x509 -in "${CERT_DIR}/harbor.crt" -noout -enddate | cut -d= -f2))"
 else
     sed -e "s|__HARBOR_HOSTNAME__|${HARBOR_HOST}|g" \
@@ -353,8 +362,14 @@ fi
 # 없으면 docker login 이 x509: certificate signed by unknown authority 로 실패한다.
 # insecure-registries 를 쓰면 TLS 검증을 통째로 끄게 되므로 쓰지 않는다.
 install -d -m 0755 "/etc/docker/certs.d/${HARBOR_HOST}"
-install -m 0644 "${CERT_DIR}/harbor.crt" "/etc/docker/certs.d/${HARBOR_HOST}/ca.crt"
-ok "docker 신뢰 설정: /etc/docker/certs.d/${HARBOR_HOST}/ca.crt"
+# 사내 CA 가 있으면 CA 를 넣는다. 자가서명이면 서버 인증서 자체가 신뢰 대상이다.
+if [[ -f "${CERT_DIR}/ca.crt" ]]; then
+    install -m 0644 "${CERT_DIR}/ca.crt" "/etc/docker/certs.d/${HARBOR_HOST}/ca.crt"
+    ok "docker 신뢰 설정(사내 CA): /etc/docker/certs.d/${HARBOR_HOST}/ca.crt"
+else
+    install -m 0644 "${CERT_DIR}/harbor.crt" "/etc/docker/certs.d/${HARBOR_HOST}/ca.crt"
+    ok "docker 신뢰 설정(자가서명): /etc/docker/certs.d/${HARBOR_HOST}/ca.crt"
+fi
 
 # 이름 해석. 공인 DNS 는 공인 IP 를 반환하거나 레코드가 없다.
 # 에어갭에서는 /etc/hosts 가 실질적인 사내 DNS 역할을 한다.

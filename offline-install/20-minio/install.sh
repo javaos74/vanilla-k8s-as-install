@@ -329,7 +329,21 @@ fi
 #=====================================================================
 step "TLS 인증서"
 
-if [[ -f "${CERT_DIR}/public.crt" && -f "${CERT_DIR}/private.key" ]]; then
+# 05-certs 로 발급한 사내 CA 인증서가 있으면 그것을 쓴다.
+# 자가서명보다 낫다 — 클라이언트가 CA 1개만 신뢰하면 되고, 갱신 시
+# 클라이언트를 다시 건드리지 않아도 된다.
+PKI_MINIO="${PKI_DIR:-/opt/pki}/minio"
+if [[ -f "${PKI_MINIO}/public.crt" && -f "${PKI_MINIO}/private.key" ]]; then
+    install -m 0644 "${PKI_MINIO}/public.crt" "${CERT_DIR}/public.crt"
+    install -m 0640 "${PKI_MINIO}/private.key" "${CERT_DIR}/private.key"
+    # MinIO 는 /certs/CAs 아래 CA 를 두면 클라이언트 검증에도 쓴다.
+    [[ -f "${PKI_MINIO}/ca.crt" ]] && {
+        install -d -m 0755 "${CERT_DIR}/CAs"
+        install -m 0644 "${PKI_MINIO}/ca.crt" "${CERT_DIR}/CAs/ca.crt"
+    }
+    chown -R 1000:1000 "$CERT_DIR"
+    ok "사내 CA 발급 인증서 사용 (${PKI_MINIO})"
+elif [[ -f "${CERT_DIR}/public.crt" && -f "${CERT_DIR}/private.key" ]]; then
     ok "기존 인증서 사용 (만료: $(openssl x509 -in "${CERT_DIR}/public.crt" -noout -enddate | cut -d= -f2))"
 else
     sed -e "s|__MINIO_HOSTNAME__|${MINIO_HOSTNAME}|g" \

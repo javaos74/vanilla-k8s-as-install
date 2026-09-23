@@ -175,6 +175,23 @@ ctr_missing_images() {
     done < "$list_file"
 }
 
+#--- 이식성 도우미 -----------------------------------------------------
+# 파일 권한을 8진수 문자열로 반환한다.
+# stat -c 는 GNU(coreutils) 전용이고 macOS/BSD 는 stat -f 다. 관리 호스트가
+# 맥일 수 있으므로(예: 05-certs/make-certs.sh) 양쪽을 지원한다.
+file_mode() {
+    stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null
+}
+
+# 인증서의 SAN 목록 문자열을 반환한다.
+# `openssl x509 -ext subjectAltName` 은 OpenSSL 1.1.1+ 전용이다. macOS 기본
+# LibreSSL 3.x 에는 -ext 가 없어 "unknown option" 으로 실패한다(실측).
+# -text 를 파싱하면 어느 구현에서나 동작한다.
+cert_san() {
+    openssl x509 -in "$1" -noout -text 2>/dev/null \
+        | awk '/Subject Alternative Name/{getline; print; exit}'
+}
+
 #--- 멱등성 도우미 -----------------------------------------------------
 # 파일을 백업하고 교체한다. 내용이 같으면 아무것도 하지 않는다.
 install_file() {

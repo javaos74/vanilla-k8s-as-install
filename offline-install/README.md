@@ -35,9 +35,15 @@ UiPath Automation Suite 용 인프라를 구성한다.
 ## 2. 적용 순서 — 번호순이 아니다
 
 ```
-10-k8s  →  60-cilium  →  50-nfs-csi  →  40-haproxy  →  30-harbor  →  20-minio
+10-k8s  →  05-certs  →  60-cilium  →  50-nfs-csi  →  40-haproxy  →  30-harbor  →  20-minio
                                                       70-mssql · 80-postgresql (독립)
 ```
+
+`05-certs` 는 사내 CA 하나로 모든 서비스 인증서를 발급하고 각 노드(master·worker)에
+CA 를 신뢰시킨다. **10-k8s 다음에 두는 이유**는 containerd 신뢰 설정이
+`/etc/containerd/config.toml` 을 요구하기 때문이다(발급 자체는 언제든 가능하다).
+건너뛰어도 각 서비스가 자가서명 인증서를 만들어 동작하지만, 그 경우 클라이언트가
+인증서를 서비스마다 따로 신뢰해야 한다.
 
 CNI 가 없으면 노드가 `NotReady` 이고 아무 워크로드도 스케줄되지 않는다. 그래서
 `10-k8s` 다음에 **`60-cilium` 을 먼저** 적용한다. 디렉터리 번호는 구성요소 분류이지
@@ -46,6 +52,7 @@ CNI 가 없으면 노드가 `NotReady` 이고 아무 워크로드도 스케줄�
 | 단계 | 내용 | 번들 크기 | 상태 |
 |---|---|---|---|
 | `10-k8s` | kubeadm, containerd, helm, docker, podman | 381M | 완료 (CP 23/23, worker 24/24) |
+| `05-certs` | 사내 CA + 서비스 인증서 5종, 노드 CA 신뢰 | 번들 없음 | 완료 (발급 36/36, 배포 11/11) |
 | `60-cilium` | CNI. 노드를 Ready 로 만든다 | 348M | 완료 (CP 9/9, worker 5/5) |
 | `50-nfs-csi` | NFS 서버 + csi-driver-nfs + StorageClass | 226M | 완료 (서버 11/11, CP 16/16, worker 6/6) |
 | `40-haproxy` | ingress L4 로드밸런서 | 45M | 완료 (11/11) |
@@ -141,6 +148,9 @@ worker 추가는 `10-k8s/README.md` 4.0절을 볼 것. control plane 에서 발�
   common.sh           공통 함수(로깅·판정·체크섬·이미지 적재)
   verify-urls.sh      업스트림 URL 생존 확인
   publish-images.sh   커스텀 이미지를 레지스트리에 게시
+05-certs/
+  make-certs.sh       사내 CA + 서비스 인증서 발급 (openssl 만 필요)
+  deploy-certs.sh     노드에 CA 신뢰 설정 + 인증서 배치 (/opt/pki)
 10-k8s/ 20-minio/ 30-harbor/ 40-haproxy/ 50-nfs-csi/ 60-cilium/
 70-mssql/ 80-postgresql/
   build-bundle.sh     빌드 호스트에서 실행

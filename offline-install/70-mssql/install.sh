@@ -111,6 +111,45 @@ run_checks() {
     check "collation 이 ${MSSQL_COLLATION}" \
         bash -c "[[ '${coll}' == '${MSSQL_COLLATION}' ]]"
 
+    #--- TLS (설정한 경우에만) ------------------------------------------
+    if [[ -f "${MSSQL_DATA_DIR}/mssql.conf" ]] \
+       && grep -q '^tlscert' "${MSSQL_DATA_DIR}/mssql.conf" 2>/dev/null; then
+        step "TLS 설정 검증"
+        check "인증서·키가 mssql uid(10001) 소유" bash -c "
+            [[ \$(stat -c %u '${MSSQL_DATA_DIR}/certs/mssql.key') == 10001 ]]"
+        check "키 권한 0600" bash -c "
+            [[ \$(stat -c %a '${MSSQL_DATA_DIR}/certs/mssql.key') == 600 ]]"
+        # 서버가 실제로 그 인증서를 **로드했는지**를 errorlog 로 확인한다.
+        #
+        # openssl s_client -starttls mssql 을 쓰려 했으나 불가능하다.
+        # OpenSSL 3.0.2(컨테이너 내부)의 -starttls 는 smtp/pop3/imap/ftp/xmpp
+        # 등만 지원하고 mssql 은 목록에 없다(실측: "Value must be one of").
+        # TDS prelogin 을 직접 구현하는 것은 판정 스크립트에 과하다.
+        #
+        # 대신 SQL Server 자신이 남기는 기록을 본다. 이것이 더 권위 있다 —
+        # 어떤 파일을 실제로 읽었는지 경로까지 찍히므로, 설정 오타나 권한
+        # 문제로 무시된 경우가 그대로 드러난다.
+        #   "The certificate [Certificate File:'...'] was successfully loaded
+        #    for encryption."
+        check "SQL Server 가 사내 CA 인증서를 로드함(errorlog)" bash -c "
+            grep -a 'successfully loaded for encryption' '${MSSQL_DATA_DIR}/log/errorlog' 2>/dev/null \
+              | grep -q '/var/opt/mssql/certs/mssql.pem'"
+        check "TLS 설정 초기화 성공(errorlog)" bash -c "
+            grep -aq 'Successfully initialized the TLS configuration' '${MSSQL_DATA_DIR}/log/errorlog' 2>/dev/null"
+
+        # 암호화 연결이 실제로 성립하는지. -N 은 암호화를 필수로 요구한다.
+        # (-C 는 자가서명/사내 CA 를 신뢰. 컨테이너 신뢰 저장소에 우리 CA 가
+        #  없으므로 필요하다. 인증서 신원은 위 errorlog 검사로 확인한다)
+        check "암호화 연결(-N) 성공" bash -c "
+            docker exec -e SQLCMDPASSWORD='$(sa_pw)' '$CONTAINER' \
+              '$MSSQL_SQLCMD' -S localhost -U sa -N -C -b -Q 'SELECT 1' -o /dev/null"
+
+        local tls_line
+        tls_line="$(grep -a 'successfully loaded for encryption' "${MSSQL_DATA_DIR}/log/errorlog" 2>/dev/null | tail -1)"
+        log "errorlog: ${tls_line:-확인불가}"
+        log "인증서 발급자: $(openssl x509 -in "${MSSQL_DATA_DIR}/certs/mssql.pem" -noout -issuer 2>/dev/null | sed 's/^issuer=//')"
+    fi
+
     #--- FTS 실동작 검증 ------------------------------------------------
     # SERVERPROPERTY 는 "설치됨"까지만 알려준다. 카탈로그·인덱스를 실제로
     # 만들고 CONTAINS 질의를 수행해야 동작을 증명할 수 있다.
@@ -287,7 +326,59 @@ else
 fi
 
 #=====================================================================
-# 3. compose 생성 및 기동
+# 3. TLS (선택) — 05-certs 로 발급한 인증서가 있을 때만
+#
+# SQL Server 는 인증서를 주지 않으면 기동 시 자가서명 인증서를 스스로 만든다.
+# 그것으로도 암호화는 되지만 클라이언트가 검증할 수 없어 매번
+# TrustServerCertificate=true 를 써야 한다. 사내 CA 인증서를 넣으면
+# 클라이언트가 CA 만 신뢰하면 되고 검증도 제대로 된다.
+#
+# 설정은 mssql.conf 로 한다. 컨테이너에서는 mssql-conf 명령을 쓸 수 없으므로
+# /var/opt/mssql/mssql.conf 를 직접 쓴다. 이 경로는 우리 호스트 볼륨이다.
+#
+# 요구사항(Microsoft 문서 + 실측):
+#   - 인증서/키가 mssql 사용자 소유여야 한다 (컨테이너 uid/gid = 10001:10001)
+#   - 파일 권한 0600
+#   - 키는 PEM(PKCS#8). 05-certs 의 openssl 산출물이 이 형식이다
+#   - CN 이 접속 FQDN 과 같아야 한다 (SAN 만으로는 거부하는 클라이언트가 있다)
+#=====================================================================
+step "TLS 설정"
+
+PKI_MSSQL="${PKI_DIR:-/opt/pki}/mssql"
+MSSQL_TLS_DIR="${MSSQL_DATA_DIR}/certs"
+
+if [[ -f "${PKI_MSSQL}/mssql.pem" && -f "${PKI_MSSQL}/mssql.key" ]]; then
+    install -d -m 0700 "$MSSQL_TLS_DIR"
+    install -m 0600 "${PKI_MSSQL}/mssql.pem" "${MSSQL_TLS_DIR}/mssql.pem"
+    install -m 0600 "${PKI_MSSQL}/mssql.key" "${MSSQL_TLS_DIR}/mssql.key"
+    [[ -f "${PKI_MSSQL}/ca.crt" ]] && install -m 0644 "${PKI_MSSQL}/ca.crt" "${MSSQL_TLS_DIR}/ca.crt"
+    chown -R 10001:10001 "$MSSQL_TLS_DIR"
+
+    # forceencryption 은 0 으로 둔다(클라이언트가 선택). 1 로 두면 암호화를
+    # 지원하지 않는 기존 클라이언트가 전부 끊긴다. 강제하려면 site.env 에서
+    # MSSQL_FORCE_ENCRYPTION=1 로 바꿀 것.
+    cat > "${MSSQL_DATA_DIR}/mssql.conf" <<EOF
+# SQL Server 설정 — 70-mssql/install.sh 가 생성했다.
+# 컨테이너 내부 경로 기준이다(/var/opt/mssql 이 호스트의 ${MSSQL_DATA_DIR}).
+[network]
+tlscert = /var/opt/mssql/certs/mssql.pem
+tlskey = /var/opt/mssql/certs/mssql.key
+tlsprotocols = 1.2
+forceencryption = ${MSSQL_FORCE_ENCRYPTION:-0}
+EOF
+    chown 10001:10001 "${MSSQL_DATA_DIR}/mssql.conf"
+    chmod 0644 "${MSSQL_DATA_DIR}/mssql.conf"
+    MSSQL_TLS_ENABLED=1
+    ok "사내 CA 인증서로 TLS 설정 (${PKI_MSSQL})"
+    log "  forceencryption=${MSSQL_FORCE_ENCRYPTION:-0} / tlsprotocols=1.2"
+else
+    MSSQL_TLS_ENABLED=0
+    log "사내 CA 인증서가 없다(${PKI_MSSQL}). SQL Server 자가서명 인증서를 쓴다."
+    log "  05-certs/make-certs.sh + deploy-certs.sh 로 발급·배치하면 교체된다."
+fi
+
+#=====================================================================
+# 4. compose 생성 및 기동
 #=====================================================================
 step "compose 파일 생성"
 
@@ -326,7 +417,7 @@ fi
 ok "SQL Server 기동 및 접속 확인"
 
 #=====================================================================
-# 4. 판정
+# 5. 판정
 #=====================================================================
 run_checks
 rc=$?

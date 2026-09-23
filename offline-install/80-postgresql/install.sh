@@ -284,7 +284,14 @@ fi
 #=====================================================================
 step "TLS 인증서"
 
-if [[ -f "${CERT_DIR}/server.crt" && -f "${CERT_DIR}/server.key" ]]; then
+# 05-certs 로 발급한 사내 CA 인증서가 있으면 그것을 쓴다.
+PKI_PG="${PKI_DIR:-/opt/pki}/pgsql"
+if [[ -f "${PKI_PG}/server.crt" && -f "${PKI_PG}/server.key" ]]; then
+    install -m 0644 "${PKI_PG}/server.crt" "${CERT_DIR}/server.crt"
+    install -m 0600 "${PKI_PG}/server.key" "${CERT_DIR}/server.key"
+    [[ -f "${PKI_PG}/ca.crt" ]] && install -m 0644 "${PKI_PG}/ca.crt" "${CERT_DIR}/ca.crt"
+    ok "사내 CA 발급 인증서 사용 (${PKI_PG})"
+elif [[ -f "${CERT_DIR}/server.crt" && -f "${CERT_DIR}/server.key" ]]; then
     ok "기존 인증서 사용 (만료: $(openssl x509 -in "${CERT_DIR}/server.crt" -noout -enddate | cut -d= -f2))"
 else
     sed -e "s|__PG_HOSTNAME__|${PG_HOSTNAME}|g" \

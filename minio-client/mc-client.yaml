@@ -1,20 +1,38 @@
-# minio.myrobots.co.kr 테스트용 mc(mcli) 클라이언트 파드
+# MinIO 연결 확인용 mc(mcli) 클라이언트 파드
 #
-# 사전 준비 (Secret 은 파일로 저장하지 않는다):
-#   ./setup.sh          # CA ConfigMap + minio-creds Secret 생성 후 이 매니페스트 적용
+# 사전 준비 — 아래 두 리소스를 먼저 만든다. 자격증명을 파일로 남기지 않기 위해
+# 값을 인자로 직접 넘긴다(셸 history 에 남지 않게 앞에 공백을 두거나 read 를 쓸 것).
 #
-# 사용:
+#   kubectl create ns minio-test
+#
+#   # 1) MinIO 서버 인증서를 발급한 CA. 서버의 public.crt 를 그대로 쓴다.
+#   #    05-certs 를 썼다면 /opt/pki/minio/ca.crt 다.
+#   kubectl -n minio-test create configmap minio-ca \
+#       --from-file=minio-ca.crt=/opt/pki/minio/ca.crt
+#
+#   # 2) 접속 자격증명
+#   kubectl -n minio-test create secret generic minio-creds \
+#       --from-literal=username='<MINIO_ROOT_USER>' \
+#       --from-literal=password='<MINIO_ROOT_PASSWORD>'
+#
+# 적용과 사용:
+#   kubectl apply -f mc-client.yaml
 #   kubectl -n minio-test exec -it deploy/mc-client -- mcli ls minio
+#
+# 정리:
+#   kubectl delete ns minio-test
+#
+# MC_URL 의 호스트명은 자신의 MinIO 주소로 바꿀 것.
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
   name: minio-test
 ---
-# MinIO 는 자체 서명 인증서(CN=minio.myrobots.co.kr)를 쓴다.
-# CA ConfigMap(minio-ca) / Secret(minio-creds) 은 setup.sh 가 만든다.
-#   - minio-ca   : minio-ca.crt  (infra-01:/opt/minio/certs/public.crt)
-#   - minio-creds: username / password (infra-01 의 minio 컨테이너 env 에서 추출)
+# MinIO 가 사내 CA(또는 자가서명) 인증서를 쓰므로 CA 를 파드에 넣어야 한다.
+# mc 는 ~/.mc/certs/CAs 아래의 인증서를 신뢰한다.
+#   - ConfigMap minio-ca   : 키 이름이 minio-ca.crt 여야 한다(파일로 마운트된다)
+#   - Secret    minio-creds: username / password
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -10,6 +10,18 @@
 #   sudo ./install.sh
 #   sudo ./install.sh --role control-plane
 #
+#   # 다중 control plane(HA) 의 첫 CP : 안정적인 엔드포인트를 반드시 준다.
+#   #   <LB> 는 모든 CP 의 6443 을 앞단에서 받는 로드밸런서 주소다.
+#   #   이 값 없이 init 하면 나중에 CP 를 추가할 수 없다(README 4.1절).
+#   sudo ./install.sh --role control-plane --control-plane-endpoint k8s-api.example:6443
+#
+#   # 추가 control plane : 첫 CP 에서 조인 정보를 발급한 뒤
+#   #   sudo ./install.sh --print-join-command
+#   sudo ./install.sh --role control-plane \
+#         --join-command "kubeadm join k8s-api.example:6443 --token ... \
+#                         --discovery-token-ca-cert-hash sha256:..." \
+#         --certificate-key <KEY>
+#
 #   # worker : 조인 정보가 반드시 필요하다.
 #   #   control plane 에서 먼저:
 #   #     sudo kubeadm token create --print-join-command
@@ -21,12 +33,18 @@
 #   sudo ./install.sh --role worker --api-server 10.0.0.11:6443 \
 #         --token abcdef.0123456789abcdef --ca-cert-hash sha256:1234...
 #
-#   sudo ./install.sh --check-only    # 설치 없이 현재 상태만 판정(역할 자동 판별)
-#   sudo ./install.sh --reset         # kubeadm reset + 설정 정리
+#   sudo ./install.sh --check-only          # 설치 없이 현재 상태만 판정(역할 자동 판별)
+#   sudo ./install.sh --print-join-command  # CP 에서 worker/CP 조인 명령 발급
+#   sudo ./install.sh --reset               # kubeadm reset + 설정 정리
+#
+# taint 정책 (다중 노드에서 중요):
+#   기본은 자동이다. --control-plane-endpoint 를 줬거나(HA 의도) 추가 CP 로
+#   조인하는 경우 control-plane taint 를 유지하고, 단일 CP 면 제거한다.
+#   --untaint / --keep-taint 로 명시할 수 있다.
 #
 # 결과:
-#   control plane : 단일 노드 control plane. CNI 가 없으므로 노드는 NotReady 다.
-#                   이것이 정상이며 60-cilium 을 적용하면 Ready 로 전환된다.
+#   control plane : CNI 가 없으므로 노드는 NotReady 다. 이것이 정상이며
+#                   60-cilium 을 적용하면 Ready 로 전환된다.
 #   worker        : 클러스터에 조인된 노드. 역시 CNI 가 그 노드에 올라와야
 #                   Ready 가 된다(60-cilium 의 --role worker 참고).
 #---------------------------------------------------------------------
@@ -39,6 +57,11 @@ JOIN_COMMAND=""
 API_ENDPOINT=""
 JOIN_TOKEN=""
 CA_CERT_HASH=""
+CP_ENDPOINT=""          # --control-plane-endpoint (첫 CP 에서 HA 를 켠다)
+CERT_KEY=""             # --certificate-key (추가 CP 조인)
+EXTRA_SANS=""           # --cert-san (쉼표 구분, 반복 가능)
+TAINT_POLICY="auto"     # auto | keep | remove
+TAINT_EXPLICIT=0        # --untaint/--keep-taint 를 사용자가 직접 줬는가
 
 usage() {
     sed -n '3,30p' "${BASH_SOURCE[0]}" | sed 's/^#//'
@@ -48,6 +71,12 @@ while (($#)); do
     case "$1" in
         --check-only)     MODE="check" ;;
         --reset)          MODE="reset" ;;
+        --print-join-command) MODE="print-join" ;;
+        --control-plane-endpoint) CP_ENDPOINT="${2:?--control-plane-endpoint 에 값이 없다 (HOST:PORT)}"; shift ;;
+        --certificate-key) CERT_KEY="${2:?--certificate-key 에 값이 없다}"; shift ;;
+        --cert-san)       EXTRA_SANS="${EXTRA_SANS:+${EXTRA_SANS},}${2:?--cert-san 에 값이 없다}"; shift ;;
+        --untaint)        TAINT_POLICY="remove"; TAINT_EXPLICIT=1 ;;
+        --keep-taint)     TAINT_POLICY="keep";   TAINT_EXPLICIT=1 ;;
         --role)           ROLE="${2:?--role 에 값이 없다 (control-plane | worker)}"; shift ;;
         --join-command)   JOIN_COMMAND="${2:?--join-command 에 값이 없다}"; shift ;;
         --api-server)     API_ENDPOINT="${2:?--api-server 에 값이 없다 (HOST:PORT)}"; shift ;;
@@ -90,6 +119,42 @@ fi
 [[ "$ROLE" == "control-plane" || "$ROLE" == "worker" ]] \
     || die "--role 값이 잘못됐다: ${ROLE} (control-plane | worker)"
 
+#---------------------------------------------------------------------
+# control plane 의 세부 모드 — init(첫 CP) 인가 join(추가 CP) 인가
+#
+# kubeadm 자체가 이 둘을 다른 명령으로 나눈다. 조인 정보가 주어졌으면
+# 추가 CP 로 본다. 이렇게 하면 사용자가 모드를 따로 지정할 필요가 없고,
+# worker 조인과 인자 형태가 같아 외울 것이 줄어든다.
+#---------------------------------------------------------------------
+CP_MODE="init"
+if [[ "$ROLE" == "control-plane" ]] \
+   && [[ -n "$JOIN_COMMAND" || -n "$JOIN_TOKEN" || -n "$CERT_KEY" ]]; then
+    CP_MODE="join"
+fi
+
+# HOST:PORT 형태를 강제한다. 포트를 빼먹으면 kubeadm 이 그대로 받아들인 뒤
+# 6443 이 아닌 곳을 보게 되어 원인 찾기 어려운 실패가 된다.
+normalize_endpoint() {
+    local ep="$1"
+    [[ "$ep" == *:* ]] || ep="${ep}:6443"
+    grep -qE '^[A-Za-z0-9._-]+:[0-9]+$' <<<"$ep" \
+        || die "엔드포인트 형태가 잘못됐다: ${1} (HOST:PORT 또는 HOST)"
+    echo "$ep"
+}
+[[ -n "$CP_ENDPOINT" ]] && CP_ENDPOINT="$(normalize_endpoint "$CP_ENDPOINT")"
+
+# taint 정책 결정.
+#   - 추가 CP 조인: 항상 유지. 여기서 taint 를 풀면 CP 에 일반 워크로드가 섞인다.
+#   - 첫 CP 에 --control-plane-endpoint 를 줬다: HA 의도이므로 유지.
+#   - 그 밖(단일 CP): 제거. 그래야 워크로드가 스케줄된다.
+if [[ "$TAINT_POLICY" == "auto" ]]; then
+    if [[ "$CP_MODE" == "join" || -n "$CP_ENDPOINT" ]]; then
+        TAINT_POLICY="keep"
+    else
+        TAINT_POLICY="remove"
+    fi
+fi
+
 DEB_DIR="${BUNDLE_ROOT}/debs"
 IMG_DIR="${BUNDLE_ROOT}/images"
 BIN_DIR="${BUNDLE_ROOT}/bin"
@@ -127,6 +192,65 @@ parse_join_command() {
 }
 [[ -n "$JOIN_COMMAND" ]] && parse_join_command "$JOIN_COMMAND"
 
+
+#---------------------------------------------------------------------
+# HA 관련 조회 헬퍼
+#---------------------------------------------------------------------
+KADM_KC=/etc/kubernetes/admin.conf
+
+# 클러스터에 설정된 controlPlaneEndpoint. 없으면 빈 문자열.
+# kubeadm 이 kube-system/kubeadm-config ConfigMap 에 보관한다.
+cluster_cp_endpoint() {
+    kubectl --kubeconfig "$KADM_KC" -n kube-system get cm kubeadm-config \
+        -o jsonpath='{.data.ClusterConfiguration}' 2>/dev/null \
+        | sed -nE 's/^controlPlaneEndpoint:[[:space:]]*(.+)$/\1/p' | head -1
+}
+
+# control plane 노드 수
+cp_node_count() {
+    kubectl --kubeconfig "$KADM_KC" get nodes \
+        -l node-role.kubernetes.io/control-plane -o name 2>/dev/null | grep -c . || true
+}
+
+# etcd 멤버 목록을 etcdctl 로 조회한다.
+# etcdctl 은 etcd 이미지 안에 있으므로 호스트에 설치할 필요가 없다.
+# 에어갭에서도 추가로 받아올 것이 없다는 뜻이다.
+etcdctl_in_pod() {
+    local pod="etcd-${NODE_NAME}"
+    kubectl --kubeconfig "$KADM_KC" -n kube-system exec "$pod" -- etcdctl \
+        --endpoints=https://127.0.0.1:2379 \
+        --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+        --cert=/etc/kubernetes/pki/etcd/server.crt \
+        --key=/etc/kubernetes/pki/etcd/server.key \
+        "$@" 2>/dev/null
+}
+
+# etcd 멤버 수. 조회 실패 시 0 을 돌려 판정이 조용히 통과하지 않게 한다.
+etcd_member_count() {
+    local n
+    n="$(etcdctl_in_pod member list | grep -c . || true)"
+    echo "${n:-0}"
+}
+
+# endpoint health 가 healthy 라고 답한 멤버 수.
+etcd_healthy_count() {
+    local n
+    n="$(etcdctl_in_pod endpoint health --cluster | grep -c 'is healthy' || true)"
+    echo "${n:-0}"
+}
+
+# 아래 둘은 retry_until 에 그대로 넘기기 위한 술어(predicate)다.
+#
+# 재시도가 필요한 이유: CP 조인 직후에는 etcd static 파드가 아직 API 에
+# 등록되지 않아 kubectl exec 이 실패한다. 그 순간 판정하면 멤버 수를 0 으로
+# 읽어 거짓 실패가 된다(실측: 조인 직후 0, 4분 뒤 2).
+etcd_members_match() {
+    [[ "$(etcd_member_count)" -eq "$1" ]]
+}
+etcd_all_healthy() {
+    local n; n="$(etcd_member_count)"
+    (( n > 0 )) && [[ "$(etcd_healthy_count)" -eq "$n" ]]
+}
 
 #=====================================================================
 # 판정 (--check-only 및 설치 후 공통)
@@ -213,7 +337,12 @@ run_checks() {
     fi
 
     #--- control plane ------------------------------------------------
-    check "apiserver 응답(6443)"   bash -c "timeout 10 kubectl --kubeconfig /etc/kubernetes/admin.conf get --raw /healthz >/dev/null"
+    # admin.conf 는 controlPlaneEndpoint 가 있으면 **LB 주소**를 가리킨다.
+    # 그래서 즉시 판정하면 실패할 수 있다 — LB 가 백엔드를 UP 으로 올리는 데
+    # 헬스체크 두 번(rise 2)이 걸리기 때문이다. 실측에서 init 직후 1회 실패 후
+    # 2초 뒤 통과하는 것을 확인했다. 재시도로 감싼다.
+    check "apiserver 응답(admin.conf 의 엔드포인트)" retry_until 60 bash -c "
+        timeout 10 kubectl --kubeconfig /etc/kubernetes/admin.conf get --raw /healthz >/dev/null"
 
     if [[ -f /etc/kubernetes/admin.conf ]]; then
         export KUBECONFIG=/etc/kubernetes/admin.conf
@@ -225,9 +354,86 @@ run_checks() {
                     -o jsonpath='{.items[*].status.phase}' 2>/dev/null | grep -q Running || exit 1
             done"
         check "노드 등록됨" bash -c "kubectl get nodes -o name 2>/dev/null | grep -q node/"
-        check "control-plane taint 제거됨(단일 노드 스케줄 가능)" bash -c "
-            ! kubectl get nodes -o jsonpath='{.items[*].spec.taints[*].key}' 2>/dev/null \
-              | grep -q node-role.kubernetes.io/control-plane"
+
+        #--- 다중 control plane 상태 조회 ------------------------------
+        # taint 기대값을 정하는 데도 쓰이므로 먼저 구한다.
+        local cpe cp_n etcd_members etcd_healthy
+        cpe="$(cluster_cp_endpoint)"
+        cp_n="$(cp_node_count)"
+        : "${cp_n:=0}"
+
+        # taint 판정의 기대값은 **클러스터 실제 상태**에서 끌어온다.
+        # --check-only 에는 --control-plane-endpoint 가 넘어오지 않으므로
+        # 설치 시 인자로 판단하면 HA 클러스터를 단일 노드로 오판한다(실측).
+        # 사용자가 --untaint/--keep-taint 를 명시했으면 그것을 존중한다.
+        local taint_expect="$TAINT_POLICY"
+        if (( ! TAINT_EXPLICIT )); then
+            if [[ -n "$cpe" ]] || (( cp_n > 1 )); then
+                taint_expect="keep"
+            else
+                taint_expect="remove"
+            fi
+        fi
+
+        # 단일 노드에서는 제거돼 있어야 워크로드가 뜨고, 다중 노드에서는
+        # 남아 있어야 CP 가 워크로드로 오염되지 않는다.
+        if [[ "$taint_expect" == "remove" ]]; then
+            check "control-plane taint 제거됨(단일 노드 스케줄 가능)" bash -c "
+                ! kubectl get nodes -o jsonpath='{.items[*].spec.taints[*].key}' 2>/dev/null \
+                  | grep -q node-role.kubernetes.io/control-plane"
+        else
+            check "control-plane taint 유지됨(다중 노드: CP 에 워크로드 금지)" bash -c "
+                kubectl get node ${NODE_NAME} -o jsonpath='{.spec.taints[*].key}' 2>/dev/null \
+                  | grep -q node-role.kubernetes.io/control-plane"
+        fi
+
+        #--- 다중 control plane 판정 ----------------------------------
+        if [[ -n "$cpe" ]]; then
+            ok "controlPlaneEndpoint = ${cpe}  (CP 추가 가능)"
+            # 인증서에 그 주소가 들어가 있어야 클라이언트 검증이 통과한다.
+            local cpe_host="${cpe%:*}"
+            check "apiserver 인증서 SAN 에 ${cpe_host} 포함" bash -c "
+                openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -text \
+                  | grep -A1 'Subject Alternative Name' | grep -q '${cpe_host}'"
+            # 그 엔드포인트로 실제 응답이 오는지. LB 설정 누락을 여기서 잡는다.
+            check "controlPlaneEndpoint 로 apiserver 응답" bash -c "
+                timeout 10 curl -sk https://${cpe}/healthz | grep -q ok"
+        else
+            warn "controlPlaneEndpoint 가 없다 — 이 클러스터에는 CP 를 추가할 수 없다."
+            log  "  CP 를 늘릴 계획이면 지금 reset 후 --control-plane-endpoint 로 다시 init 할 것."
+            log  "  근거와 우회 방법은 README 4.1절."
+        fi
+
+        log "control plane 노드 수: ${cp_n}"
+
+        if (( cp_n > 1 )); then
+            # etcd 멤버 수가 CP 수와 같아야 한다. 어긋나면 조인이 중간에
+            # 실패했거나 제거된 CP 의 멤버가 남아 있다는 뜻이다.
+            # 조인 직후 etcd 파드가 API 에 없을 수 있어 재시도로 감싼다.
+            check "etcd 멤버 수 == CP 노드 수(${cp_n})" \
+                retry_until 120 etcd_members_match "$cp_n"
+
+            # 멤버가 보이는 것만으로는 부족하다. 각 엔드포인트의 건강을 본다.
+            check "etcd 전 멤버 healthy" retry_until 120 etcd_all_healthy
+
+            etcd_members="$(etcd_member_count)"
+            etcd_healthy="$(etcd_healthy_count)"
+            log "etcd 멤버 ${etcd_members}개 / healthy ${etcd_healthy}개"
+
+            # 정족수는 과반이다. 짝수는 장애 허용 수가 늘지 않으면서
+            # 동시 장애 시 정족수를 잃을 확률만 높인다.
+            if (( cp_n % 2 == 0 )); then
+                warn "CP 수가 짝수(${cp_n})다. etcd 정족수는 과반이라 이득이 없다."
+                log  "  ${cp_n}대는 $((cp_n/2 - 1))대 장애까지 견딘다 — $((cp_n-1))대와 같다. 홀수(3·5)를 권장한다."
+            else
+                ok "CP 수가 홀수(${cp_n}) — 장애 허용 $((cp_n/2))대"
+            fi
+
+            # 모든 CP 가 준비됐는지. 하나가 빠져 있으면 정족수 여유가 없다.
+            check "전 CP 노드가 API 에 등록됨" bash -c "
+                [[ \$(kubectl get nodes -l node-role.kubernetes.io/control-plane \
+                     -o name 2>/dev/null | grep -c .) -eq ${cp_n} ]]"
+        fi
 
         # CNI 가 없으면 노드는 NotReady, CoreDNS 는 Pending 이다. 이것이 이 단계의 정상 상태다.
         local node_status coredns_phase
@@ -248,8 +454,37 @@ run_checks() {
 #=====================================================================
 do_reset() {
     step "kubeadm reset (역할: ${ROLE})"
+
+    # 다중 CP 에서는 파괴 범위가 다르다. CP 가 여러 대면 이 노드만 빠지고
+    # 클러스터는 남는다. 대신 etcd 멤버를 제대로 빼지 않으면 정족수가 깨진다.
+    RESET_CP_N=0
+    if [[ -f "$KADM_KC" ]]; then
+        RESET_CP_N="$(cp_node_count)"
+        : "${RESET_CP_N:=0}"
+    fi
+
     if [[ "$ROLE" == "worker" ]]; then
         warn "이 노드를 클러스터에서 떼어낸다. 5초 후 진행. 중단하려면 Ctrl-C."
+    elif (( RESET_CP_N > 1 )); then
+        warn "CP ${RESET_CP_N}대 중 이 노드를 떼어낸다. 클러스터는 남는다. 5초 후 진행."
+        # kubeadm reset 은 API 에 닿을 수 있으면 etcd 멤버를 스스로 제거한다.
+        # 닿지 않으면 유령 멤버가 남아 남은 CP 의 정족수 계산을 망친다.
+        if timeout 10 kubectl --kubeconfig "$KADM_KC" get --raw /healthz >/dev/null 2>&1; then
+            log "API 도달 가능 — kubeadm 이 etcd 멤버를 스스로 제거한다."
+        else
+            warn "API 에 닿지 않는다. etcd 멤버가 남을 수 있다."
+            log  "  reset 후 살아 있는 CP 에서 직접 제거할 것:"
+            log  "    kubectl -n kube-system exec etcd-<살아있는CP> -- etcdctl \\"
+            log  "      --endpoints=https://127.0.0.1:2379 \\"
+            log  "      --cacert=/etc/kubernetes/pki/etcd/ca.crt \\"
+            log  "      --cert=/etc/kubernetes/pki/etcd/server.crt \\"
+            log  "      --key=/etc/kubernetes/pki/etcd/server.key member list"
+            log  "    ... member remove <이 노드의 ID>"
+        fi
+        # 남는 CP 수가 짝수가 되면 정족수 여유가 줄어든다는 점을 알려 준다.
+        if (( (RESET_CP_N - 1) % 2 == 0 && RESET_CP_N - 1 > 0 )); then
+            warn "제거 후 CP 가 $((RESET_CP_N-1))대(짝수)가 된다. 홀수 유지를 권장한다."
+        fi
     else
         warn "클러스터를 파괴한다. 5초 후 진행. 중단하려면 Ctrl-C."
     fi
@@ -261,15 +496,70 @@ do_reset() {
     iptables-save 2>/dev/null | grep -viE "KUBE|CILIUM" | iptables-restore 2>/dev/null || true
     ipvsadm -C 2>/dev/null || true
     ok "reset 완료. containerd/kubelet 패키지는 남아 있다."
-    if [[ "$ROLE" == "worker" ]]; then
+    if [[ "$ROLE" == "worker" ]] || (( RESET_CP_N > 1 )); then
         echo
-        log "control plane 에서 노드 객체도 지울 것:  kubectl delete node ${NODE_NAME}"
+        log "남아 있는 control plane 에서 노드 객체도 지울 것:  kubectl delete node ${NODE_NAME}"
     fi
     exit 0
 }
 
 [[ "$MODE" == "reset" ]] && do_reset
 if [[ "$MODE" == "check" ]]; then run_checks; exit $?; fi
+
+#=====================================================================
+# --print-join-command : CP 에서 조인 정보를 발급한다
+#
+# 왜 별도 모드로 두는가:
+#   worker 조인은 token + CA 해시만으로 되지만, CP 조인은 certificate-key 가
+#   더 필요하다. 그리고 그 키로 여는 kubeadm-certs Secret 은 **2시간 뒤
+#   자동 삭제된다**. 그래서 CP 를 추가할 때마다 인증서를 다시 업로드해
+#   새 키를 받아야 한다. 이 과정을 사람이 외우기 어려워 한 명령으로 묶었다.
+#=====================================================================
+if [[ "$MODE" == "print-join" ]]; then
+    [[ -f "$KADM_KC" ]] || die "이 노드는 control plane 이 아니다(admin.conf 없음). 첫 CP 에서 실행할 것."
+
+    step "조인 명령 발급"
+
+    WORKER_JOIN="$(kubeadm token create --print-join-command 2>/dev/null)" \
+        || die "kubeadm token create 실패"
+
+    CPE="$(cluster_cp_endpoint)"
+
+    echo
+    echo "  --- worker 추가 ---"
+    echo "  sudo ./install.sh --role worker --join-command \"${WORKER_JOIN}\""
+    echo
+
+    if [[ -z "$CPE" ]]; then
+        warn "controlPlaneEndpoint 가 설정돼 있지 않아 CP 를 추가할 수 없다."
+        log  "  CP 조인은 안정적인 엔드포인트를 전제로 한다. README 4.1절을 볼 것."
+    else
+        # 인증서를 다시 올려 새 키를 받는다. 기존 Secret 이 있으면 교체된다.
+        #
+        # 출력 형식에 주의. kubeadm 은 라벨과 키를 **다른 줄**에 쓴다(실측).
+        #   [upload-certs] Using certificate key:
+        #   <64자 hex>
+        # 그래서 같은 줄에서 찾는 정규식으로는 잡히지 않는다. 라벨 문구에
+        # 의존하지 않고 단독으로 놓인 64자 hex 행을 집는다.
+        #
+        # 에어갭에서는 kubeadm 이 dl.k8s.io 버전 조회를 시도해 10초쯤 지연된
+        # 뒤 로컬 버전으로 넘어간다. 경고가 보이는 것은 정상이다.
+        NEW_CERT_KEY="$(kubeadm init phase upload-certs --upload-certs 2>/dev/null \
+            | grep -oE '^[0-9a-f]{64}$' | tail -1)"
+        [[ -n "$NEW_CERT_KEY" ]] \
+            || die "certificate-key 를 얻지 못했다. 'kubeadm init phase upload-certs --upload-certs' 를 직접 실행해 확인할 것."
+
+        echo "  --- control plane 추가 ---"
+        echo "  sudo ./install.sh --role control-plane \\"
+        echo "        --join-command \"${WORKER_JOIN}\" \\"
+        echo "        --certificate-key ${NEW_CERT_KEY}"
+        echo
+        warn "certificate-key 는 2시간 뒤 무효가 된다(kubeadm-certs Secret 자동 삭제)."
+        log  "  만료됐으면 이 명령을 다시 실행해 새 키를 받을 것."
+        log  "  이 키로 클러스터 CA 개인키를 복호화할 수 있다. 채널을 가려서 전달할 것."
+    fi
+    exit 0
+fi
 
 #=====================================================================
 # 0. 사전 확인
@@ -498,25 +788,144 @@ MSG
     exit $rc
 fi
 
-step "kubeadm init (control plane)"
+#--- 추가 control plane 조인 -------------------------------------------
+if [[ "$CP_MODE" == "join" ]]; then
+    step "kubeadm join --control-plane (추가 control plane)"
 
-if [[ -f /etc/kubernetes/admin.conf ]]; then
-    warn "이미 초기화된 클러스터가 있다. init 을 건너뛴다."
-    warn "재설치가 필요하면: sudo ./install.sh --reset"
+    if [[ -f /etc/kubernetes/admin.conf ]]; then
+        warn "이미 control plane 산출물이 있다. join 을 건너뛴다."
+        warn "다시 조인하려면: sudo ./install.sh --reset"
+    else
+        [[ -n "$API_ENDPOINT" && -n "$JOIN_TOKEN" && -n "$CA_CERT_HASH" && -n "$CERT_KEY" ]] \
+            || die "$(cat <<'MSG'
+CP 조인 정보가 부족하다. 첫 CP 에서 아래를 실행해 출력을 그대로 쓸 것.
+
+  sudo ./install.sh --print-join-command
+
+CP 조인에는 worker 조인의 세 값(엔드포인트·token·CA 해시) 외에
+--certificate-key 가 더 필요하다. 그 키로 여는 kubeadm-certs Secret 은
+발급 후 2시간이면 사라지므로, 만료됐으면 위 명령을 다시 실행할 것.
+MSG
+)"
+        [[ "$CA_CERT_HASH" == sha256:* ]] \
+            || die "--ca-cert-hash 는 sha256: 로 시작해야 한다: ${CA_CERT_HASH}"
+        # 32바이트 AES 키의 hex 표현이므로 64자다. 길이를 먼저 보면
+        # 잘려서 붙여진 키를 kubeadm 실행 전에 잡을 수 있다.
+        grep -qE '^[0-9a-f]{64}$' <<<"$CERT_KEY" \
+            || die "--certificate-key 형태가 잘못됐다(64자 hex 여야 한다): ${CERT_KEY}"
+
+        JOIN_HOST="${API_ENDPOINT%:*}"
+        JOIN_PORT="${API_ENDPOINT##*:}"
+        timeout 8 bash -c ">/dev/tcp/${JOIN_HOST}/${JOIN_PORT}" 2>/dev/null \
+            || die "apiserver ${API_ENDPOINT} 에 TCP 연결이 되지 않는다. LB 와 방화벽/NSG 를 확인할 것."
+        ok "apiserver ${API_ENDPOINT} 도달 확인"
+
+        # 2379/2380 은 etcd 용이다. CP 끼리 열려 있지 않으면 조인이
+        # etcd 멤버 추가 단계에서 멈춘다. 먼저 확인해 원인을 명확히 한다.
+        if timeout 5 bash -c ">/dev/tcp/${JOIN_HOST}/2379" 2>/dev/null; then
+            ok "기존 CP 의 etcd(2379) 도달 확인"
+        else
+            warn "기존 CP 의 2379 에 닿지 않는다. LB 를 통한 주소라면 정상일 수 있다."
+            log  "  조인이 etcd 단계에서 멈추면 CP 간 2379/2380 방화벽을 확인할 것."
+        fi
+
+        sed -e "s@__API_ENDPOINT__@${API_ENDPOINT}@g" \
+            -e "s@__TOKEN__@${JOIN_TOKEN}@g" \
+            -e "s@__CA_CERT_HASH__@${CA_CERT_HASH}@g" \
+            -e "s@__CERT_KEY__@${CERT_KEY}@g" \
+            -e "s@__NODE_IP__@${NODE_IP}@g" \
+            -e "s@__NODE_NAME__@${NODE_NAME}@g" \
+            "${CONF_DIR}/kubeadm-cp-join.yaml" > /tmp/kubeadm-cp-join.yaml
+        chmod 0600 /tmp/kubeadm-cp-join.yaml   # certificate-key 가 들어 있다
+
+        systemctl enable kubelet >/dev/null
+
+        log "kubeadm join --control-plane 실행 (로그: /var/log/kubeadm-join.log)"
+        kubeadm join --config /tmp/kubeadm-cp-join.yaml \
+            2>&1 | tee /var/log/kubeadm-join.log \
+            || die "kubeadm join(control-plane) 실패. /var/log/kubeadm-join.log 확인."
+        rm -f /tmp/kubeadm-cp-join.yaml
+        ok "control plane 조인 완료"
+    fi
 else
-    sed -e "s@__NODE_IP__@${NODE_IP}@g" \
-        -e "s@__NODE_NAME__@${NODE_NAME}@g" \
-        "${CONF_DIR}/kubeadm-init.yaml" > /tmp/kubeadm-init.yaml
+    step "kubeadm init (control plane)"
 
-    systemctl enable kubelet >/dev/null
+    if [[ -f /etc/kubernetes/admin.conf ]]; then
+        warn "이미 초기화된 클러스터가 있다. init 을 건너뛴다."
+        warn "재설치가 필요하면: sudo ./install.sh --reset"
+    else
+        #--- ClusterConfiguration 렌더링 ---------------------------------
+        # controlPlaneEndpoint 와 추가 certSAN 은 있을 때만 넣고, 없으면
+        # 자리표시 줄을 지운다. 빈 값을 남기면 YAML 파싱이 깨진다.
+        CP_EP_LINE=""
+        SAN_LINES=""
+        if [[ -n "$CP_ENDPOINT" ]]; then
+            CP_EP_LINE="controlPlaneEndpoint: ${CP_ENDPOINT}"
+            # LB 주소를 SAN 에 반드시 넣는다. 없으면 그 주소로 접속할 때
+            # 인증서 검증이 실패한다.
+            SAN_LINES="    - ${CP_ENDPOINT%:*}"
+        fi
+        if [[ -n "$EXTRA_SANS" ]]; then
+            local_ifs="$IFS"; IFS=','
+            for san in $EXTRA_SANS; do
+                san="$(echo "$san" | tr -d '[:space:]')"
+                [[ -n "$san" ]] || continue
+                SAN_LINES="${SAN_LINES:+${SAN_LINES}\n}    - ${san}"
+            done
+            IFS="$local_ifs"
+        fi
 
-    log "kubeadm init 실행 (로그: /var/log/kubeadm-init.log)"
-    # --upload-certs 불필요(단일 CP). 이미지 pull 은 이미 적재됐으므로 발생하지 않는다.
-    kubeadm init --config /tmp/kubeadm-init.yaml \
-                 --skip-token-print \
-                 2>&1 | tee /var/log/kubeadm-init.log \
-        || die "kubeadm init 실패. /var/log/kubeadm-init.log 확인."
-    ok "kubeadm init 완료"
+        # 자리표시 줄 치환. GNU sed 는 치환문의 \n 을 개행으로 넣는다.
+        sed -e "s@__NODE_IP__@${NODE_IP}@g" \
+            -e "s@__NODE_NAME__@${NODE_NAME}@g" \
+            "${CONF_DIR}/kubeadm-init.yaml" > /tmp/kubeadm-init.raw
+        if [[ -n "$CP_EP_LINE" ]]; then
+            sed -i "s@^__CONTROL_PLANE_ENDPOINT__\$@${CP_EP_LINE}@" /tmp/kubeadm-init.raw
+        else
+            sed -i '/^__CONTROL_PLANE_ENDPOINT__$/d' /tmp/kubeadm-init.raw
+        fi
+        if [[ -n "$SAN_LINES" ]]; then
+            sed -i "s@^__EXTRA_CERT_SANS__\$@${SAN_LINES}@" /tmp/kubeadm-init.raw
+        else
+            sed -i '/^__EXTRA_CERT_SANS__$/d' /tmp/kubeadm-init.raw
+        fi
+        mv /tmp/kubeadm-init.raw /tmp/kubeadm-init.yaml
+
+        # 렌더링 결과를 kubeadm 에게 먼저 검증받는다. 여기서 걸러내면
+        # init 이 절반 진행된 상태로 실패하는 일을 막을 수 있다.
+        kubeadm config validate --config /tmp/kubeadm-init.yaml >/dev/null 2>&1 \
+            || die "생성된 kubeadm 설정이 유효하지 않다. 내용: /tmp/kubeadm-init.yaml"
+        ok "kubeadm 설정 검증 통과"
+
+        if [[ -n "$CP_ENDPOINT" ]]; then
+            log "controlPlaneEndpoint = ${CP_ENDPOINT} (다중 CP 가능)"
+            # LB 가 아직 없어도 init 자체는 된다. 하지만 CP 를 추가할 때
+            # 반드시 필요하므로 지금 상태를 알려 준다.
+            if timeout 5 bash -c ">/dev/tcp/${CP_ENDPOINT%:*}/${CP_ENDPOINT##*:}" 2>/dev/null; then
+                ok "엔드포인트 ${CP_ENDPOINT} 가 이미 열려 있다"
+            else
+                warn "엔드포인트 ${CP_ENDPOINT} 에 지금은 닿지 않는다."
+                log  "  이 노드의 apiserver 가 뜨면 LB 가 이쪽으로 넘겨야 한다. README 4.0.1절."
+            fi
+        else
+            log "단일 CP 모드 — controlPlaneEndpoint 없음. 나중에 CP 를 추가할 수 없다."
+        fi
+
+        systemctl enable kubelet >/dev/null
+
+        log "kubeadm init 실행 (로그: /var/log/kubeadm-init.log)"
+        # HA 인 경우 --upload-certs 로 CA 등을 Secret 에 올려둔다.
+        # 이것이 있어야 추가 CP 가 certificate-key 로 인증서를 내려받는다.
+        # 이미지 pull 은 이미 적재됐으므로 발생하지 않는다.
+        INIT_EXTRA=()
+        [[ -n "$CP_ENDPOINT" ]] && INIT_EXTRA+=(--upload-certs)
+        kubeadm init --config /tmp/kubeadm-init.yaml \
+                     --skip-token-print \
+                     "${INIT_EXTRA[@]}" \
+                     2>&1 | tee /var/log/kubeadm-init.log \
+            || die "kubeadm init 실패. /var/log/kubeadm-init.log 확인."
+        ok "kubeadm init 완료"
+    fi
 fi
 
 #=====================================================================
@@ -533,12 +942,23 @@ if [[ "$TARGET_USER" != "root" && -n "$TARGET_HOME" ]]; then
     ok "kubeconfig -> ${TARGET_HOME}/.kube/config (${TARGET_USER})"
 fi
 
-# 단일 노드이므로 control-plane taint 를 제거해야 워크로드가 스케줄된다.
-if kubectl get nodes -o jsonpath='{.items[*].spec.taints[*].key}' | grep -q node-role.kubernetes.io/control-plane; then
-    kubectl taint nodes --all node-role.kubernetes.io/control-plane- >/dev/null
-    ok "control-plane taint 제거"
+# taint 처리.
+#   remove : 단일 노드. 제거해야 워크로드가 스케줄된다.
+#   keep   : 다중 노드. CP 에 일반 워크로드를 올리지 않는다. 이것을 풀면
+#            CP 가 워크로드 부하를 같이 받아 etcd 지연으로 이어질 수 있다.
+if [[ "$TAINT_POLICY" == "remove" ]]; then
+    if kubectl get nodes -o jsonpath='{.items[*].spec.taints[*].key}' | grep -q node-role.kubernetes.io/control-plane; then
+        # --all 이 아니라 이 노드만 대상으로 한다. 다중 노드 클러스터에서
+        # 실수로 --untaint 를 줬을 때 다른 CP 까지 풀어버리지 않도록.
+        kubectl taint node "$NODE_NAME" node-role.kubernetes.io/control-plane- >/dev/null 2>&1 \
+            || kubectl taint nodes --all node-role.kubernetes.io/control-plane- >/dev/null
+        ok "control-plane taint 제거 (${NODE_NAME})"
+    else
+        ok "control-plane taint 없음"
+    fi
 else
-    ok "control-plane taint 없음"
+    ok "control-plane taint 유지 (다중 노드 정책)"
+    log "  이 CP 에 워크로드를 올리려면: kubectl taint node ${NODE_NAME} node-role.kubernetes.io/control-plane-"
 fi
 
 #=====================================================================
@@ -551,11 +971,16 @@ step "다음 단계"
 echo "  CNI 가 없어 노드는 NotReady, CoreDNS 는 Pending 이다. 정상이다."
 echo "  60-cilium 번들을 적용하면 Ready 로 전환된다."
 echo
-echo "  worker 를 추가하려면 이 노드에서 조인 명령을 발급한다:"
-echo "    sudo kubeadm token create --print-join-command"
-echo "  그 출력을 worker 에서 그대로 넘긴다:"
-echo "    sudo ./install.sh --role worker --join-command \"<위 출력>\""
+echo "  노드를 추가하려면 이 노드에서 조인 명령을 발급한다:"
+echo "    sudo ./install.sh --print-join-command"
+echo "  worker 와 CP 각각의 명령을 함께 출력한다."
 echo
+if [[ -z "$(cluster_cp_endpoint)" ]]; then
+echo "  주의: controlPlaneEndpoint 가 없어 CP 는 추가할 수 없다(worker 는 가능)."
+echo "        CP 를 늘릴 계획이면 --reset 후 아래처럼 다시 init 할 것:"
+echo "          sudo ./install.sh --control-plane-endpoint <LB주소>:6443"
+echo
+fi
 echo "  상태 확인:  kubectl get nodes -o wide ; kubectl -n kube-system get pods"
 echo "  재판정:     sudo ./install.sh --check-only"
 echo "  정리:       sudo ./install.sh --reset"

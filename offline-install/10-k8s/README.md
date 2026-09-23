@@ -93,6 +93,40 @@ cd ../10-k8s
 `kubeadm` 은 설치하지 않는다. deb 에서 `dpkg-deb -x` 로 바이너리만 꺼내
 이미지 목록을 얻으므로 빌드 호스트가 오염되지 않는다.
 
+#### 빌드 호스트는 같은 OS 이면서 **깨끗해야** 한다
+
+같은 OS 여야 하는 것만으로는 부족하다. **대상 패키지가 이미 설치돼 있으면
+번들에 구멍이 생긴다.**
+
+`apt-get install --download-only` 는 명시한 패키지는 다시 받지만 **이미 설치된
+전이 의존성은 받지 않는다**(apt 가 이미 충족된 것으로 보기 때문). 그래서 설치가
+끝난 노드에서 번들을 다시 만들면 그 노드에 있는 만큼 빠진다.
+
+실측으로 확인한 사례다. CP 로 쓰던 노드에서 다시 빌드했더니 이렇게 됐다.
+
+```
+deb 23개 (깨끗한 호스트)  ->  19개 (CP 로 쓰던 호스트)
+누락: docker-ce-rootless-extras / libnfsidmap1 / pigz / rpcbind
+```
+
+이 번들로 깨끗한 타깃에 설치하면 `dpkg` 의존성 오류가 난다. 번들 크기도
+381M → 371M 로 줄어 눈치채기 어렵다.
+
+`build-bundle.sh` 가 이 상태를 감지해 중단한다.
+
+```
+WARN 빌드 호스트에 이미 설치된 대상 패키지가 있다: kubelet kubeadm ... nfs-common
+WARN 이 상태로 빌드하면 **전이 의존성이 누락된 불완전한 번들**이 된다.
+FATAL 깨끗한 호스트에서 빌드할 것.
+```
+
+의존성 폐쇄집합을 계산해 채우는 방식은 쓰지 않았다. `libc6` 같은 기반 패키지까지
+끌어와 타깃에서 `dpkg -i` 로 기반 라이브러리를 교체할 위험이 있기 때문이다.
+감지해서 멈추는 편이 안전하다.
+
+정말 그 호스트에서 만들어야 하면 `--allow-dirty-host` 로 넘길 수 있지만,
+번들 완전성을 직접 확인해야 한다.
+
 ---
 
 ## 4. 설치 (에어갭 타깃)
@@ -102,8 +136,13 @@ cd ../10-k8s
 
 | 역할 | 명령 | 결과 |
 |---|---|---|
-| control plane | `sudo ./install.sh` (기본값) | `kubeadm init`. 단일 CP |
+| control plane (첫 대, 단일) | `sudo ./install.sh` (기본값) | `kubeadm init`. CP 추가 불가 |
+| control plane (첫 대, HA) | `sudo ./install.sh --control-plane-endpoint <LB>:6443` | `kubeadm init --upload-certs`. CP 추가 가능 |
+| control plane (추가) | `sudo ./install.sh --role control-plane --join-command "..." --certificate-key <KEY>` | `kubeadm join --control-plane` |
 | worker | `sudo ./install.sh --role worker --join-command "..."` | `kubeadm join` |
+
+CP 를 여러 대 둘 계획이면 **첫 CP 부터** `--control-plane-endpoint` 를 줘야 한다.
+나중에 붙이는 것은 사실상 재구축이다 — 이유는 4.1절.
 
 ```bash
 # 1) 전송
@@ -122,7 +161,319 @@ sudo ./install.sh
 
 `install.sh` 는 `SHA256SUMS` 를 먼저 검증하므로 전송 손상을 설치 전에 잡는다.
 
-### 4.0 worker 추가
+### 4.0 다중 control plane (HA)
+
+CP 가 한 대면 그 노드가 죽는 순간 클러스터를 조작할 수 없다. 이미 돌고 있는
+파드는 계속 돌지만 스케줄링·스케일·복구가 전부 멈춘다. CP 를 늘리는 것은
+이 단일 장애점을 없애기 위한 것이다.
+
+이 단계는 **stacked etcd** 구성이다. 각 CP 가 자기 안에 etcd 멤버를 하나씩
+갖는다. etcd 를 별도 호스트에 두는 external etcd 구성은 다루지 않는다 —
+운영 대상이 하나 더 늘고, AS 규모에서는 stacked 로 충분하다.
+
+```
+                    ┌──────────────────┐
+   kubectl ────────>│  LB :6443        │  controlPlaneEndpoint
+   kubelet ────────>│  (haproxy/F5)    │
+                    └────┬────┬────┬───┘
+                 ┌───────┘    │    └───────┐
+            ┌────▼────┐  ┌────▼────┐  ┌────▼────┐
+            │  CP-1   │  │  CP-2   │  │  CP-3   │
+            │ apiserv │  │ apiserv │  │ apiserv │
+            │ etcd ◄──┼──┼──► etcd ◄┼──┼──► etcd │   2379/2380
+            └─────────┘  └─────────┘  └─────────┘
+```
+
+#### CP 는 홀수로 둔다
+
+etcd 는 **과반**이 살아 있어야 쓰기가 된다. 짝수는 장애 허용 수를 늘리지 못하면서
+관리 대상만 늘린다.
+
+| CP 수 | 정족수 | 장애 허용 | 평가 |
+|---|---|---|---|
+| 1 | 1 | 0 | 단일 장애점 |
+| 2 | 2 | **0** | 1대만 죽어도 쓰기 불가. 1대보다 나쁘다 |
+| 3 | 2 | 1 | **권장** |
+| 4 | 3 | 1 | 3대와 같다. 이득 없음 |
+| 5 | 3 | 2 | 큰 클러스터 |
+
+2대 구성이 1대보다 나쁜 이유는 단순하다. 정족수가 2인데 멤버가 2이므로
+**어느 한 대가 죽어도 과반을 잃는다.** 게다가 고장 지점이 두 배다.
+`install.sh` 는 CP 수가 짝수면 경고한다.
+
+#### 4.0.1 LB 를 먼저 세운다
+
+`controlPlaneEndpoint` 는 모든 CP 앞에 놓인 안정적인 주소다. 이 주소는
+kubelet·컨트롤러·kubectl 이 모두 쓰므로 **CP 를 늘리거나 줄여도 바뀌지 않아야**
+한다. 그래서 특정 CP 의 IP 를 쓰면 안 된다.
+
+선택지는 세 가지다.
+
+| 방법 | 장점 | 단점 |
+|---|---|---|
+| 사내 LB (F5, NSX-ALB, 클라우드 LB) | 이미 이중화됨. 운영 주체 분명 | 방화벽·요청 절차 |
+| haproxy + keepalived VIP | 추가 장비 불필요 | 직접 운영해야 함 |
+| DNS 이름 여러 A 레코드 | 간단 | 죽은 CP 로도 보낸다. 권장하지 않음 |
+
+사내 LB 가 있으면 그것을 쓴다. `mode tcp` (L4 패스스루)여야 하고 **TLS 를
+종료해서는 안 된다.** apiserver 는 클라이언트 인증서로 사용자를 식별하므로,
+LB 가 TLS 를 끊으면 인증서가 apiserver 에 도달하지 못해 모든 요청이
+`anonymous` 가 된다. 헬스체크는 `GET /healthz` 로 한다(TCP 연결만 보면
+기동 중인 apiserver 를 정상으로 오판한다).
+
+LB 가 없으면 이 번들의 스크립트로 세운다. 전용 호스트 또는 최소한 CP 가 아닌
+노드에서 실행할 것.
+
+```bash
+# haproxy 이미지는 40-haproxy 번들의 것을 쓴다(중복 보관하지 않는다)
+sudo ./apiserver-lb.sh --backends 10.0.0.11,10.0.0.12,10.0.0.13 \
+      --image-tar <40-haproxy번들>/images/haproxy_3.4.4.tar
+
+sudo ./apiserver-lb.sh --check-only
+sudo ./apiserver-lb.sh --uninstall
+```
+
+CP 노드 자신에 LB 를 6443 으로 둘 수는 없다(apiserver 가 점유). 다른 포트로는
+가능하지만 그 CP 가 죽으면 LB 도 같이 죽어 HA 의미가 크게 줄어든다.
+
+이 스크립트는 LB **한 대**를 세운다. LB 가 단일 장애점이 되는 것을 막으려면
+4.2절의 keepalived VIP 를 쓴다.
+
+#### 4.0.2 첫 CP
+
+```bash
+sudo ./install.sh --control-plane-endpoint 10.0.0.10:6443 \
+      --cert-san 10.0.0.12 --cert-san 10.0.0.13 \
+      --cert-san k8s-api.example.internal
+```
+
+`--cert-san` 으로 나중에 쓸 주소를 미리 넣는다. apiserver 인증서의 SAN 은
+발급 후에 추가하기 번거롭다(인증서 재발급 + 컴포넌트 재시작). 지금 넉넉히
+넣는 편이 싸다.
+
+`--control-plane-endpoint` 를 주면 `install.sh` 가 `kubeadm init` 에
+`--upload-certs` 를 붙인다. CA 개인키 등이 `kube-system/kubeadm-certs`
+Secret 에 암호화되어 올라가고, 추가 CP 가 그것을 내려받아 쓴다.
+
+#### 4.0.3 추가 CP
+
+첫 CP 에서 조인 정보를 발급한다.
+
+```bash
+# 첫 CP
+sudo ./install.sh --print-join-command
+```
+
+worker 용과 CP 용 명령을 함께 출력한다. CP 용을 추가 CP 노드에서 실행한다.
+
+```bash
+# 추가 CP 노드
+sudo ./install.sh --role control-plane \
+      --join-command "kubeadm join 10.0.0.10:6443 --token ... \
+                      --discovery-token-ca-cert-hash sha256:..." \
+      --certificate-key <64자 hex>
+```
+
+`--role control-plane` 에 조인 정보가 함께 오면 추가 CP 로 판단한다. 모드를
+따로 지정하지 않아도 되고 worker 조인과 인자 형태가 같다.
+
+CP 를 붙인 뒤 **LB 백엔드에 그 노드를 추가**해야 한다. 잊으면 트래픽이 가지
+않아 HA 가 성립하지 않는다.
+
+```bash
+sudo ./apiserver-lb.sh --backends 10.0.0.11,10.0.0.12   # 다시 실행하면 갱신된다
+```
+
+#### certificate-key 는 2시간이면 사라진다
+
+`kubeadm-certs` Secret 에는 만료 시각이 붙어 있고 2시간 뒤 자동 삭제된다.
+CA 개인키가 클러스터 안에 오래 남아 있는 것이 위험하기 때문이다.
+
+만료 후 CP 를 추가하려면 인증서를 다시 올려 새 키를 받아야 한다.
+`--print-join-command` 가 매번 이 작업을 한 뒤 키를 출력하므로, 그냥 다시
+실행하면 된다.
+
+```bash
+sudo ./install.sh --print-join-command    # upload-certs 재실행 + 새 키 발급
+```
+
+이 키는 **클러스터 CA 개인키를 복호화할 수 있다.** 채팅·티켓에 남기지 말 것.
+
+#### control-plane taint 는 유지된다
+
+단일 노드에서는 `install.sh` 가 taint 를 제거해야 워크로드가 스케줄된다.
+다중 노드에서는 반대로 **유지해야** 한다. CP 에 일반 워크로드가 섞이면 그
+부하가 etcd 지연으로 이어지고, etcd 지연은 클러스터 전체의 응답성 문제가 된다.
+
+기본 동작은 자동이다.
+
+| 상황 | taint |
+|---|---|
+| 단일 CP (`--control-plane-endpoint` 없음) | 제거 |
+| HA 첫 CP (`--control-plane-endpoint` 있음) | 유지 |
+| 추가 CP | 유지 |
+
+`--untaint` / `--keep-taint` 로 명시할 수 있다.
+
+#### 4.0.4 CP 제거
+
+```bash
+# 빼낼 CP 에서
+sudo ./install.sh --reset
+# 남은 CP 에서
+kubectl delete node <빼낸-노드>
+```
+
+`kubeadm reset` 은 API 에 닿을 수 있으면 **etcd 멤버를 스스로 제거한다.**
+닿지 않는 상태에서 reset 하면 유령 멤버가 남아 남은 CP 들의 정족수 계산을
+망친다. 3대에서 1대를 이렇게 잃으면 멤버는 3인데 살아 있는 것은 2 —
+아직 과반이므로 버티지만, 한 대만 더 잃으면 쓰기가 멈춘다.
+
+`install.sh --reset` 은 이 상황을 감지해 수동 제거 명령을 안내한다.
+
+```bash
+kubectl -n kube-system exec etcd-<살아있는CP> -- etcdctl \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key member list
+# ... member remove <ID>
+```
+
+LB 백엔드에서도 빼야 한다.
+
+#### 4.0.6 검증 상태
+
+2026-09-23 에 Ubuntu 24.04.4 노드 3대 + LB 1대로 에어갭 검증했다.
+
+| 항목 | 결과 |
+|---|---|
+| 첫 CP (`--control-plane-endpoint`) | **28/28** |
+| 추가 CP 2대 (`--certificate-key`) | **각 28/28** |
+| apiserver LB (백엔드 3대) | **5/5** |
+| etcd | 3멤버 · healthy 3 · 동일 raft index · 리더 1 |
+| 번들 무결성(`verify_manifest`) | 49개 파일 통과 |
+| 에어갭 유출 | `airgap-fwd-other = 0` |
+
+`admin.conf` 가 LB 주소를 가리키는 것과 인증서 SAN 에 LB IP·`--cert-san` 값이
+들어간 것을 확인했다.
+
+**장애 시험 2종을 실제로 수행했다.**
+
+apiserver 만 정지(CP 1대) — LB 가 다른 CP 로 넘긴다.
+
+```
+CP1 자기 6443: 죽음 / admin.conf 대상: https://<LB>:6443
+kubectl get nodes  -> 3대 모두 반환
+kubectl auth whoami -> X509SHA256=89f2e0e2...
+```
+
+`auth whoami` 가 클라이언트 인증서 기반 credential-id 를 돌려준 것이 중요하다.
+LB 가 TLS 를 종료했다면 `anonymous` 가 됐을 것이므로, `mode tcp` 패스스루가
+제대로 동작한다는 증거다. 전환에는 헬스체크 주기만큼(`fall 3` x `inter 3s` ≈ 9초)
+걸려 첫 요청 1회가 실패할 수 있다.
+
+**etcd 리더 노드를 통째로 정지** — 정족수 2/3 로 쓰기까지 유지된다.
+
+```
+configmap/quorum-test-... created          <- 쓰기 성공 (정족수 필요)
+etcd: 2 healthy / 1 unhealthy(정지한 노드)
+```
+
+이 상태에서 `--check-only` 는 **실패를 정확히 잡는다**(판정이 형식적이지 않다).
+
+```
+OK   etcd 멤버 수 == CP 노드 수(3)
+FAIL etcd 전 멤버 healthy
+     etcd 멤버 3개 / healthy 2개
+=== 검증 결과: 통과 27 / 실패 1 ===
+```
+
+CP 제거(`--reset`)도 검증했다. 2대 중 1대를 reset 하니 kubeadm 이 etcd 멤버를
+스스로 제거해 목록이 2 → 1 로 줄었고, 새 `certificate-key` 를 발급받아 다시
+조인하는 것까지 확인했다.
+
+### 4.1 controlPlaneEndpoint 를 나중에 추가할 수 없는 이유
+
+`kubeadm init` 을 `--control-plane-endpoint` 없이 하면 kubeadm 은 **그 노드의
+IP 를 클러스터 곳곳에 직접 박는다.**
+
+| 대상 | 박히는 값 |
+|---|---|
+| `/etc/kubernetes/*.conf` (admin·kubelet·controller-manager·scheduler) | `server: https://<그 CP IP>:6443` |
+| `kube-system/kubeadm-config` ConfigMap | `controlPlaneEndpoint` 가 비어 있음 |
+| `kube-public/cluster-info` ConfigMap | 조인하는 노드가 참조하는 주소 |
+| apiserver 인증서 SAN | LB 주소가 없다 |
+
+이 상태에서 CP 를 추가하면 새 CP 는 자기 kubeconfig 가 **첫 CP 만** 가리키므로
+첫 CP 가 죽으면 같이 멈춘다. HA 가 아니다.
+
+바로잡으려면 위 네 곳을 모두 고치고 apiserver 인증서를 재발급한 뒤 컴포넌트를
+재시작해야 한다. 절차가 길고 중간에 틀리면 클러스터에 접속할 수 없게 된다.
+**클러스터를 새로 만드는 편이 빠르고 안전하다.**
+
+그래서 다음을 권한다.
+
+> CP 를 늘릴 **가능성**이 있으면 처음부터 `--control-plane-endpoint` 를 준다.
+> 지금 CP 가 한 대뿐이어도 LB 뒤에 한 대만 두면 된다. 나중에 CP 만 붙이면
+> 클러스터를 건드리지 않고 HA 로 올라간다.
+
+`install.sh --check-only` 는 `controlPlaneEndpoint` 가 없으면 경고한다.
+
+### 4.2 LB 이중화 — keepalived VIP
+
+`apiserver-lb.sh` 는 LB 한 대를 세운다. 그 한 대가 죽으면 CP 가 셋이어도
+클러스터에 접속할 수 없다. LB 가 새로운 단일 장애점이 된 것이다.
+
+사내 LB(F5 등)를 쓰면 이미 이중화되어 있으므로 이 절은 필요 없다.
+직접 운영한다면 **VIP 를 두 대에 띄우고** 각 대에서 `apiserver-lb.sh` 를 실행한다.
+
+```
+        VIP 10.0.0.10  (keepalived 가 한쪽에만 붙인다)
+         ↓ (MASTER 장애 시 BACKUP 으로 이동)
+   ┌─────────────┐        ┌─────────────┐
+   │ LB-1 MASTER │        │ LB-2 BACKUP │
+   │ haproxy:6443│        │ haproxy:6443│
+   └──────┬──────┘        └──────┬──────┘
+          └────────┬─────────────┘
+              CP-1 / CP-2 / CP-3 의 6443
+```
+
+`controlPlaneEndpoint` 는 VIP 주소로 둔다. keepalived 는 배포판 패키지
+(`apt-get install keepalived`)이므로 에어갭에서는 deb 를 따로 준비해야 한다.
+이 번들에는 포함하지 않았다 — LB 구성 방식이 사이트마다 달라 강제할 수 없다.
+
+설정의 핵심만 적는다(`/etc/keepalived/keepalived.conf`).
+
+```
+vrrp_script chk_haproxy {
+    # haproxy 가 죽으면 우선순위를 낮춰 VIP 를 넘긴다.
+    # 이것이 없으면 LB 호스트는 살아 있고 haproxy 만 죽은 상태에서
+    # VIP 를 계속 붙들어 트래픽이 블랙홀로 간다.
+    script "/usr/bin/killall -0 haproxy"
+    interval 2
+    weight -20
+}
+
+vrrp_instance k8s_api {
+    state MASTER          # 다른 대는 BACKUP
+    interface eth0
+    virtual_router_id 51  # 같은 L2 의 다른 VRRP 그룹과 겹치면 안 된다
+    priority 101          # BACKUP 은 100
+    authentication { auth_type PASS; auth_pass <공유암호> }
+    virtual_ipaddress { 10.0.0.10/24 }
+    track_script { chk_haproxy }
+}
+```
+
+주의할 점 둘이다.
+
+- **VRRP 는 멀티캐스트(224.0.0.18)를 쓴다.** 클라우드·가상화 환경에서 막혀 있는
+  경우가 많다. 그때는 유니캐스트(`unicast_src_ip`/`unicast_peer`)로 바꾼다.
+  Azure·AWS 처럼 VIP 자체를 허용하지 않는 환경이면 플랫폼 LB 를 쓰는 편이 맞다.
+- `virtual_router_id` 가 같은 L2 의 다른 VRRP 그룹과 겹치면 서로를 잡아먹는다.
+
+### 4.3 worker 추가
 
 control plane 에서 조인 명령을 발급한다. 토큰 기본 수명은 24시간이다.
 
@@ -219,7 +570,7 @@ worker 에도 docker·helm·podman 이 함께 설치된다. deb 세트를 역할
 하나로 유지하기 때문이다. worker 에서 쓰지는 않지만 해롭지도 않으며, 두 노드의
 런타임 조합을 동일하게 유지하는 이점이 있다.
 
-### 4.1 containerd 설정에서 반드시 맞춰야 하는 3가지
+### 4.4 containerd 설정에서 반드시 맞춰야 하는 3가지
 
 `containerd config default` 로 생성한 뒤 아래 3개를 고친다. 하나라도 틀리면 증상이 제각각이다.
 
@@ -358,6 +709,14 @@ DNS 차단으로 인한 소음이 거슬리면 `--allow-dns` 를 쓴다. 이름�
 | worker 가 계속 `NotReady` | 그 노드에 CNI 이미지가 없어 cilium 파드가 `ImagePullBackOff` | worker 에서 `60-cilium/install.sh --role worker` 실행 |
 | worker 의 PVC 파드가 `ContainerCreating` 에서 멈춤 | 그 노드에 `nfs-common` 또는 CSI 이미지가 없다 | worker 에서 `50-nfs-csi/install.sh --role worker` 실행 |
 | worker 재조인이 실패한다 | control plane 에 옛 노드 객체가 남아 있다 | `kubectl delete node <name>` 후 worker 에서 `--reset` → 재조인 |
+| CP 조인이 `error execution phase control-plane-prepare/download-certs` 로 실패 | `kubeadm-certs` Secret 이 만료됐다(2시간) | 첫 CP 에서 `./install.sh --print-join-command` 재실행해 새 키를 받는다 |
+| `--certificate-key 형태가 잘못됐다` | 키가 잘려서 붙여졌다 | 32바이트 AES 키의 hex 이므로 정확히 64자여야 한다 |
+| CP 조인이 etcd 단계에서 멈춘다 | CP 간 2379/2380 이 막혀 있다 | stacked etcd 는 CP 끼리 이 포트로 통신한다. 방화벽/NSG 확인 |
+| CP 를 추가했는데 첫 CP 가 죽으면 같이 멈춘다 | `controlPlaneEndpoint` 없이 init 했다 | 4.1절. 사실상 재구축이 필요하다 |
+| `kubectl` 이 `x509: certificate is valid for ..., not <LB주소>` | LB 주소가 apiserver 인증서 SAN 에 없다 | `--control-plane-endpoint` 를 주면 자동으로 들어간다. 이미 init 했다면 `--cert-san` 을 넣어 인증서 재발급 필요 |
+| LB 는 살아 있는데 모든 요청이 권한 오류 | LB 가 TLS 를 종료했다(L7 모드) | apiserver 는 클라이언트 인증서로 사용자를 식별한다. `mode tcp` 패스스루여야 한다 |
+| CP 1대를 reset 했더니 남은 CP 들이 쓰기 불가 | 유령 etcd 멤버가 남아 정족수를 잃었다 | 4.0.4절의 `etcdctl member remove` |
+| `etcd 멤버 수 == CP 노드 수` 판정 실패 | 조인이 중간에 실패했거나 제거된 CP 의 멤버가 남았다 | `etcdctl member list` 로 대조 후 불필요한 멤버 제거 |
 
 ### 로그 위치
 

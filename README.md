@@ -14,7 +14,7 @@ kubeadm 으로 구성한 바닐라 Kubernetes **v1.36.4** 와, 그 위에 UiPath
 | 전제 | 노드가 인터넷에 접근 가능 | 노드가 인터넷에 접근 **불가**(에어갭) |
 | 패키지 출처 | `download.docker.com`, `pkgs.k8s.io` apt 저장소를 노드에 등록해 직접 설치 | 온라인 빌드 호스트에서 만든 **번들(tar.gz)** 을 옮겨서 설치 |
 | 컨테이너 이미지 | 노드가 레지스트리에서 pull | 번들의 tar 를 `ctr -n k8s.io images import` 로 적재 |
-| 노드 구성 | control plane 1 + worker 3 | 단일 노드 기준(+ worker 추가 지원) |
+| 노드 구성 | control plane 1 + worker 3 | 단일 노드 / **다중 CP(HA)** / worker 추가 모두 지원 |
 | CNI | Cilium 1.20.2 (매니페스트는 `offline-install/60-cilium/`) | Cilium 1.20.2 |
 | 진입점 | `prep-node.sh` → `kubeadm init --config kubeadm-init.yaml` | `offline-install/10-k8s/build-bundle.sh` → `install.sh` |
 | 검증 | 수동 | 단계별 판정 스크립트 + nftables 에어갭 강제 |

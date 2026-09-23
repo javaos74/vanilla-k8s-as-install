@@ -27,6 +27,10 @@ UiPath Automation Suite 용 인프라를 구성한다.
    업스트림에서 수집 -> tar.gz  ──(복사)──>      tar 풀고 설치 + 판정
 ```
 
+빌드 호스트는 같은 OS 이면서 **깨끗해야** 한다. 대상 패키지가 이미 설치돼 있으면
+apt 가 전이 의존성을 다시 내려받지 않아 번들에 구멍이 생긴다(실측: deb 23 → 19개).
+`10-k8s/build-bundle.sh` 가 이 상태를 감지해 중단한다 — 근거는 `10-k8s/README.md` 3절.
+
 번들은 자기완결형이다(`00-common/` 포함). 타깃에서 추가로 받아올 것이 없다.
 `install.sh` 는 시작 시 `SHA256SUMS` 를 검증하므로 전송 손상을 설치 전에 잡는다.
 
@@ -51,7 +55,7 @@ CNI 가 없으면 노드가 `NotReady` 이고 아무 워크로드도 스케줄�
 
 | 단계 | 내용 | 번들 크기 | 상태 |
 |---|---|---|---|
-| `10-k8s` | kubeadm, containerd, helm, docker, podman | 381M | 완료 (CP 23/23, worker 24/24) |
+| `10-k8s` | kubeadm, containerd, helm, docker, podman. 단일/다중 CP(HA) | 381M | 완료 (단일 CP 23/23, worker 24/24, **3-CP HA 각 28/28**) |
 | `05-certs` | 사내 CA + 서비스 인증서 5종, 노드 CA 신뢰 | 번들 없음 | 완료 (발급 36/36, 배포 11/11) |
 | `60-cilium` | CNI. 노드를 Ready 로 만든다 | 348M | 완료 (CP 9/9, worker 5/5) |
 | `50-nfs-csi` | NFS 서버 + csi-driver-nfs + StorageClass | 226M | 완료 (서버 11/11, CP 16/16, worker 6/6) |
@@ -136,6 +140,15 @@ sudo ./90-verify/airgap-off.sh                       # 해제 + 카운터 판정
 sudo ./install.sh --check-only     # 설치하지 않고 현재 상태만 판정
 sudo ./install.sh --role worker    # worker 노드 (10-k8s / 60-cilium / 50-nfs-csi)
 sudo ./install.sh --uninstall      # 제거 (10-k8s 는 --reset)
+```
+
+control plane 을 여러 대 두려면(HA) **첫 CP 부터** 안정적인 엔드포인트를 줘야 한다.
+나중에 붙이는 것은 사실상 재구축이다 — 근거는 `10-k8s/README.md` 4.1절.
+
+```bash
+sudo ./apiserver-lb.sh --backends cp1,cp2,cp3 --image-tar <40-haproxy번들>/images/haproxy_*.tar
+sudo ./install.sh --control-plane-endpoint <LB>:6443    # 첫 CP
+sudo ./install.sh --print-join-command                  # 조인 명령 발급(worker/CP)
 ```
 
 worker 추가는 `10-k8s/README.md` 4.0절을 볼 것. control plane 에서 발급한

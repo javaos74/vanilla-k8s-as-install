@@ -17,6 +17,16 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../00-common/common.sh"
 
+ALLOW_DIRTY_HOST=0
+while (($#)); do
+    case "$1" in
+        --allow-dirty-host) ALLOW_DIRTY_HOST=1 ;;
+        -h|--help) sed -n '3,12p' "${BASH_SOURCE[0]}" | sed 's/^#//'; exit 0 ;;
+        *) die "알 수 없는 인자: $1  (--allow-dirty-host)" ;;
+    esac
+    shift
+done
+
 require_online
 require_cmds curl dpkg dpkg-deb tar
 
@@ -122,6 +132,46 @@ download_debs "고정 버전 패키지" "${PINNED_DEBS[@]}" \
 download_debs "OS 의존 패키지" "${OS_DEPS[@]}" \
     || warn "일부 OS 패키지를 받지 못했다. 타깃에 이미 설치돼 있으면 문제되지 않는다."
 
+#---------------------------------------------------------------------
+# 빌드 호스트는 **깨끗해야** 한다
+#
+# 아래 `apt-get install --download-only --reinstall` 은 명시한 패키지는 다시
+# 받지만, **이미 설치된 전이 의존성은 받지 않는다**(apt 가 충족된 것으로 본다).
+# 그래서 k8s/docker 가 이미 설치된 호스트에서 빌드하면 번들에 구멍이 생긴다.
+#
+# 실측: CP 로 쓰던 노드에서 다시 빌드했더니 deb 가 23개 -> 19개로 줄었다.
+#   docker-ce-rootless-extras / libnfsidmap1 / pigz / rpcbind 누락
+# 이 번들로 깨끗한 타깃에 설치하면 dpkg 의존성 오류가 난다.
+#
+# 폐쇄집합을 직접 계산해 채우는 방법은 쓰지 않는다. libc6 같은 기반 패키지까지
+# 끌어와 타깃에서 dpkg -i 로 기반 라이브러리를 바꿔버릴 위험이 있다.
+# 대신 오염을 감지해 멈춘다. --allow-dirty-host 로 넘길 수 있지만 권장하지 않는다.
+#---------------------------------------------------------------------
+DIRTY=()
+for _p in kubelet kubeadm kubectl containerd.io docker-ce nfs-common; do
+    if dpkg -s "$_p" >/dev/null 2>&1; then DIRTY+=("$_p"); fi
+done
+if ((${#DIRTY[@]} > 0)); then
+    warn "빌드 호스트에 이미 설치된 대상 패키지가 있다: ${DIRTY[*]}"
+    warn "이 상태로 빌드하면 **전이 의존성이 누락된 불완전한 번들**이 된다."
+    if ((ALLOW_DIRTY_HOST)); then
+        warn "--allow-dirty-host 가 지정돼 계속한다. 번들 완전성을 직접 확인할 것."
+    else
+        die "$(cat <<'MSG'
+깨끗한 호스트에서 빌드할 것. 설치 대상과 같은 OS 의 새 VM 이면 된다.
+
+이 검사가 있는 이유:
+  apt 는 이미 설치된 의존성을 다시 내려받지 않는다. 그래서 설치가 끝난
+  노드에서 번들을 만들면 그 노드에 이미 있는 패키지만큼 번들에 구멍이 생기고,
+  깨끗한 타깃에서 dpkg 의존성 오류로 드러난다.
+
+정말 이 호스트에서 만들어야 한다면:
+  ./build-bundle.sh --allow-dirty-host
+MSG
+)"
+    fi
+fi
+
 # 위에서 받지 못한 추가 의존성을 apt 가 계산해 채운다.
 # (예: docker-ce 가 요구하는 libslirp / pigz 등 OS 버전마다 다르다)
 log "잔여 의존성 계산 및 다운로드"
@@ -134,6 +184,11 @@ sudo chown -R "$(id -u):$(id -g)" "$DEB_DIR" 2>/dev/null || true
 rm -rf "${DEB_DIR}/partial" "${DEB_DIR}/lock"
 
 DEB_COUNT="$(find "$DEB_DIR" -name '*.deb' | wc -l)"
+# 깨끗한 24.04 에서 23개였다(실측). 크게 적으면 빌드 호스트 오염을 의심할 것.
+if (( DEB_COUNT < 20 )); then
+    warn "deb 가 ${DEB_COUNT}개뿐이다. 깨끗한 호스트에서는 23개 내외였다."
+    warn "빌드 호스트 오염으로 전이 의존성이 누락됐을 수 있다."
+fi
 [[ "$DEB_COUNT" -gt 0 ]] || die "deb 를 하나도 받지 못했다"
 ok "deb ${DEB_COUNT}개 ($(du -sh "$DEB_DIR" | cut -f1))"
 
@@ -211,6 +266,12 @@ nodeRegistration:
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration
 kubernetesVersion: v${K8S_VERSION}
+# __CONTROL_PLANE_ENDPOINT__ 는 install.sh 가 치환하거나 줄째로 지운다.
+#   --control-plane-endpoint 를 준 경우  -> controlPlaneEndpoint: <LB>:6443
+#   주지 않은 경우(단일 CP)              -> 줄 삭제
+# 이 값이 없으면 CP 를 나중에 추가할 수 없다. kubeadm 이 각 CP 의 kubelet.conf 와
+# 컴포넌트 kubeconfig 에 자기 IP 를 직접 박아버리기 때문이다.
+__CONTROL_PLANE_ENDPOINT__
 networking:
   podSubnet: ${POD_CIDR}
   serviceSubnet: ${SERVICE_CIDR}
@@ -220,6 +281,10 @@ apiServer:
     - __NODE_NAME__
     - 127.0.0.1
     - localhost
+# LB 주소와 다른 CP 들의 이름·IP 가 여기 들어간다. 빠지면 그 주소로 접속할 때
+# 인증서 검증이 실패한다. certSAN 은 init 후에 추가하기 번거로우므로
+# 처음부터 넉넉히 넣는다.
+__EXTRA_CERT_SANS__
 ---
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
@@ -237,6 +302,33 @@ EOF
 # nodeRegistration.name 을 박아두는 이유: 기본값은 hostname 이지만,
 # install.sh 가 소문자로 정규화한 이름을 쓰므로 양쪽을 일치시킨다.
 # 대문자가 섞인 호스트명이면 kubelet 이 등록에 실패한다.
+# 추가 control plane 조인용. worker 조인과 다른 점은 controlPlane 절이다.
+#   localAPIEndpoint : 이 노드의 apiserver 가 listen 할 주소
+#   certificateKey   : init 이 --upload-certs 로 올려둔 CA 등을 복호화할 키
+#                      kubeadm-certs Secret 은 2시간 뒤 사라진다.
+cat > "${CONF_DIR}/kubeadm-cp-join.yaml" <<'EOF'
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: JoinConfiguration
+discovery:
+  bootstrapToken:
+    apiServerEndpoint: __API_ENDPOINT__
+    token: __TOKEN__
+    caCertHashes:
+      - __CA_CERT_HASH__
+controlPlane:
+  localAPIEndpoint:
+    advertiseAddress: __NODE_IP__
+    bindPort: 6443
+  certificateKey: __CERT_KEY__
+nodeRegistration:
+  name: __NODE_NAME__
+  criSocket: unix:///run/containerd/containerd.sock
+  kubeletExtraArgs:
+    - name: node-ip
+      value: __NODE_IP__
+EOF
+ok "kubeadm-cp-join.yaml"
+
 cat > "${CONF_DIR}/kubeadm-join.yaml" <<'EOF'
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: JoinConfiguration
@@ -288,6 +380,9 @@ else
 fi
 cp "${SCRIPT_DIR}/../00-common/common.sh"    "${BUNDLE_DIR}/00-common/"
 cp "${SCRIPT_DIR}/install.sh"                "${BUNDLE_DIR}/"
+# 다중 CP 용 apiserver LB 구성 스크립트. haproxy 이미지는 넣지 않는다
+# (40-haproxy 번들에 이미 있고 45M 을 중복 보관할 이유가 없다).
+cp "${SCRIPT_DIR}/apiserver-lb.sh"           "${BUNDLE_DIR}/"
 cp "${SCRIPT_DIR}/README.md"                 "${BUNDLE_DIR}/" 2>/dev/null || true
 mkdir -p "${BUNDLE_DIR}/90-verify"
 cp "${SCRIPT_DIR}/../90-verify/airgap-on.sh"  "${BUNDLE_DIR}/90-verify/"
@@ -314,7 +409,10 @@ write_manifest "$BUNDLE_DIR"
 TARBALL="${SCRIPT_DIR}/bundle/${BUNDLE_NAME}.tar.gz"
 log "tar.gz 생성"
 tar -C "${SCRIPT_DIR}/bundle" -czf "$TARBALL" "$BUNDLE_NAME"
-sha256sum "$TARBALL" | awk '{print $1}' > "${TARBALL}.sha256"
+# `sha256sum -c` 가 읽을 수 있는 형식으로 쓴다. 해시만 남기면
+# "no properly formatted checksum lines found" 로 검증 자체가 되지 않는다.
+# 경로가 아니라 파일명만 넣어야 타깃에서 같은 디렉터리에 두고 검증할 수 있다.
+( cd "$(dirname "$TARBALL")" && sha256sum "$(basename "$TARBALL")" ) > "${TARBALL}.sha256"
 
 step "완료"
 cat "${BUNDLE_DIR}/BUNDLE-INFO"

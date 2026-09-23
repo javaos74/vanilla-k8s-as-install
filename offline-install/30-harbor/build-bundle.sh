@@ -376,7 +376,10 @@ write_manifest "$BUNDLE_DIR"
 
 TARBALL="${SCRIPT_DIR}/bundle/${BUNDLE_NAME}.tar.gz"
 tar -C "${SCRIPT_DIR}/bundle" -czf "$TARBALL" "$BUNDLE_NAME"
-sha256sum "$TARBALL" | awk '{print $1}' > "${TARBALL}.sha256"
+# `sha256sum -c` 가 읽을 수 있는 형식으로 쓴다. 해시만 남기면
+# "no properly formatted checksum lines found" 로 검증 자체가 되지 않는다.
+# 경로가 아니라 파일명만 넣어야 타깃에서 같은 디렉터리에 두고 검증할 수 있다.
+( cd "$(dirname "$TARBALL")" && sha256sum "$(basename "$TARBALL")" ) > "${TARBALL}.sha256"
 
 step "완료"
 cat "${BUNDLE_DIR}/BUNDLE-INFO"

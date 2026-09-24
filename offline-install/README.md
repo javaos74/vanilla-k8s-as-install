@@ -31,6 +31,45 @@ UiPath Automation Suite 용 인프라를 구성한다.
 apt 가 전이 의존성을 다시 내려받지 않아 번들에 구멍이 생긴다(실측: deb 23 → 19개).
 `10-k8s/build-bundle.sh` 가 이 상태를 감지해 중단한다 — 근거는 `10-k8s/README.md` 3절.
 
+### 컨테이너로 빌드하기 — VM 없이
+
+깨끗한 빌드 호스트를 매번 준비하는 것이 번거롭다면 컨테이너를 쓴다.
+번들 빌드는 deb 와 이미지를 **내려받는 일**뿐이라 커널이 필요 없다.
+
+```bash
+cd offline-install
+./00-common/build-in-container.sh 24.04 all       # 8단계 전부
+./00-common/build-in-container.sh 22.04 10-k8s    # 22.04 용 (10-k8s 만 OS 의존)
+./00-common/build-in-container.sh 24.04 30-harbor 70-mssql
+```
+
+**rootless podman 을 쓰므로 sudo 가 필요 없다.** 매번 새 컨테이너를 띄우므로
+"깨끗한 호스트" 조건도 자동으로 만족한다.
+
+단계 중 **OS 에 의존하는 것은 `10-k8s` 뿐**이다. deb 버전 문자열에 코드네임이
+들어가고(docker) OS 기본 패키지도 릴리스마다 다르기 때문이다. 나머지는 이미지·
+차트·바이너리만 다루므로 어느 이미지에서 만들어도 같다.
+
+#### 최소 컨테이너 이미지를 그대로 쓰면 안 된다
+
+`ubuntu:24.04` 컨테이너는 최소 이미지라 실제 서버에 기본 포함된 것들이 빠져 있다.
+그 상태로 의존성을 받으면 **기반 패키지까지 번들에 들어간다.**
+
+```
+최소 이미지 그대로   : deb 101개 — systemd / systemd-sysv / perl / python3 /
+                      dbus / openssh-client / libc6 포함  ← 위험
+ubuntu-server-minimal: deb 33개 — 기반 패키지 없음        ← 정상
+```
+
+타깃에서 `dpkg -i` 로 `systemd` 나 `libc6` 를 덮어쓰면 노드가 손상될 수 있다.
+`build-in-container.sh` 는 `ubuntu-server-minimal` 을 먼저 설치해 기반 패키지
+집합을 실제 서버와 맞춘다. 그리고 `build-bundle.sh` 에 **핵심 시스템 패키지가
+섞이면 중단하는 가드**가 있어, 어떤 방법으로 빌드해도 이 사고는 걸러진다.
+
+deb 개수가 서버 빌드(23개)보다 많은 것은 정상이다. Ubuntu Server 이미지에 이미
+있던 것들(`git` `keyutils` `libtirpc*` `less` `patch` 등)이 포함되기 때문이며,
+더 최소인 타깃에도 설치되는 **안전한 상위집합**이다.
+
 번들은 자기완결형이다(`00-common/` 포함). 타깃에서 추가로 받아올 것이 없다.
 `install.sh` 는 시작 시 `SHA256SUMS` 를 검증하므로 전송 손상을 설치 전에 잡는다.
 
@@ -160,6 +199,7 @@ worker 추가는 `10-k8s/README.md` 4.0절을 볼 것. control plane 에서 발�
 
 ```
 00-common/
+  build-in-container.sh  컨테이너에서 번들 빌드(rootless podman, sudo 불필요)
   versions.env        모든 버전 핀. 단일 출처. 여기만 고치면 전 단계에 반영된다
   site.env.example    사이트별 설정 예시. 복사해서 site.env 로 쓴다
   site.env            내부 IP·사내 호스트명. git 추적 제외. 번들에는 포함된다

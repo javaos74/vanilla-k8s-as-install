@@ -184,11 +184,43 @@ sudo chown -R "$(id -u):$(id -g)" "$DEB_DIR" 2>/dev/null || true
 rm -rf "${DEB_DIR}/partial" "${DEB_DIR}/lock"
 
 DEB_COUNT="$(find "$DEB_DIR" -name '*.deb' | wc -l)"
-# 깨끗한 24.04 에서 23개였다(실측). 크게 적으면 빌드 호스트 오염을 의심할 것.
+# 깨끗한 24.04 서버에서 23개, 컨테이너(ubuntu-server-minimal 기반)에서 33개였다.
+# 크게 적으면 빌드 호스트 오염을 의심할 것.
 if (( DEB_COUNT < 20 )); then
-    warn "deb 가 ${DEB_COUNT}개뿐이다. 깨끗한 호스트에서는 23개 내외였다."
+    warn "deb 가 ${DEB_COUNT}개뿐이다. 깨끗한 호스트에서는 23개 이상이었다."
     warn "빌드 호스트 오염으로 전이 의존성이 누락됐을 수 있다."
 fi
+
+#---------------------------------------------------------------------
+# 핵심 시스템 패키지가 섞이면 중단한다
+#
+# 반대 방향의 오염도 위험하다. 빌드 환경이 **너무 최소**면(예: 최소
+# 컨테이너 이미지) 실제 서버에 기본 포함된 것들까지 의존성으로 끌려온다.
+# 그 번들을 타깃에서 dpkg -i 하면 systemd·libc6 같은 기반 패키지를 덮어써
+# 시스템을 망칠 수 있다.
+#
+# 실측: ubuntu:24.04 최소 이미지에서 빌드하니 deb 101개가 되고 systemd /
+# systemd-sysv / perl / python3 / dbus / openssh-client / libc6 가 포함됐다.
+# ubuntu-server-minimal 을 먼저 설치해 기반을 맞추면 33개로 줄고 이들이 빠진다.
+#---------------------------------------------------------------------
+CORE_PKG_RE='^(systemd|systemd-sysv|systemd-dev|systemd-resolved|systemd-timesyncd|libsystemd-shared|libnss-systemd|libpam-systemd|libc6|libc-bin|perl|perl-base|perl-modules[-.0-9]*|python3|python3-minimal|python3\.[0-9]+|python3\.[0-9]+-minimal|dbus|dbus-bin|dbus-daemon|openssh-client|apparmor|libssl[0-9]|zlib1g|libstdc\+\+[0-9]+|libgcc-s[0-9]+|tzdata)_'
+mapfile -t CORE_HITS < <(cd "$DEB_DIR" && ls *.deb 2>/dev/null | grep -E "$CORE_PKG_RE" || true)
+if ((${#CORE_HITS[@]} > 0)); then
+    for h in "${CORE_HITS[@]}"; do warn "핵심 시스템 패키지: ${h}"; done
+    die "$(cat <<'MSG'
+번들에 핵심 시스템 패키지가 섞였다. 이 번들을 쓰면 타깃이 손상될 수 있다.
+
+원인은 빌드 환경이 실제 대상보다 **너무 최소**라는 것이다. 실제 서버에 기본
+포함된 패키지가 없어서 apt 가 그것들까지 의존성으로 받아 왔다.
+
+컨테이너에서 빌드한다면 기반 패키지를 먼저 맞출 것:
+  apt-get install -y ubuntu-server-minimal
+
+00-common/build-in-container.sh 는 이 작업을 대신 한다.
+MSG
+)"
+fi
+ok "핵심 시스템 패키지 미포함 확인"
 [[ "$DEB_COUNT" -gt 0 ]] || die "deb 를 하나도 받지 못했다"
 ok "deb ${DEB_COUNT}개 ($(du -sh "$DEB_DIR" | cut -f1))"
 

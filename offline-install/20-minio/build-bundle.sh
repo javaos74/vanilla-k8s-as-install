@@ -30,6 +30,21 @@ IMG_DIR="${BUNDLE_DIR}/images"
 CONF_DIR="${BUNDLE_DIR}/conf"
 
 step "MinIO ${MINIO_TAG} 번들 빌드 (OS 공용)"
+#---------------------------------------------------------------------
+# 매 빌드에 다시 만드는 것은 먼저 지운다
+#
+# mkdir -p 만 쓰면 이전 빌드의 파일이 그대로 남아 새 아카이브에 실린다.
+# 실측 사고: site.env 를 뺀 뒤 다시 빌드했는데도 이전 빌드의 site.env 가
+# 번들에 남아 내부 IP·사내 호스트명이 그대로 들어갔다. SHA256SUMS 는 그것까지
+# 포함해 만들어지므로 무결성 검사로도 걸러지지 않는다.
+#
+# debs / images / bin 은 의도적 다운로드 캐시라 남긴다. 아래는 매번
+# 스크립트가 생성·복사하는 것들이므로 지워도 재빌드 비용이 없다.
+#---------------------------------------------------------------------
+rm -rf "${BUNDLE_DIR}/00-common" "${BUNDLE_DIR}/conf" "${BUNDLE_DIR}/90-verify"
+rm -f  "${BUNDLE_DIR}"/*.sh "${BUNDLE_DIR}"/*.md \
+       "${BUNDLE_DIR}/SHA256SUMS" "${BUNDLE_DIR}/BUNDLE-INFO"
+
 mkdir -p "$IMG_DIR" "$CONF_DIR"
 
 if ! command -v skopeo >/dev/null 2>&1; then

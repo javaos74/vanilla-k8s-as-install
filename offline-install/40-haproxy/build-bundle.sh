@@ -56,6 +56,7 @@ IMG_TAR="${IMG_DIR}/$(image_to_filename "$HAPROXY_IMAGE").tar"
 if [[ -s "$IMG_TAR" ]]; then
     log "이미 존재: $(basename "$IMG_TAR")"
 else
+    rm -f "${IMG_TAR}.part"
     skopeo copy --retry-times 5 "docker://${HAPROXY_IMAGE}" \
         "docker-archive:${IMG_TAR}.part:${HAPROXY_IMAGE}" >/dev/null \
         || die "이미지 받기 실패: ${HAPROXY_IMAGE}"

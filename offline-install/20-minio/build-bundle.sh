@@ -70,6 +70,7 @@ for img in "${MINIO_IMAGES[@]}"; do
         log "이미 존재: $(basename "$out")"
     else
         log "이미지 받기: $img"
+        rm -f "${out}.part"
         skopeo copy --retry-times 5 "docker://${img}" \
             "docker-archive:${out}.part:${img}" >/dev/null \
             || die "이미지 받기 실패: $img"

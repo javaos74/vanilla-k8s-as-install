@@ -30,7 +30,7 @@ OSVER="${1:?사용법: $0 <22.04|24.04> <단계...|all>}"; shift
 [[ "$OSVER" == "22.04" || "$OSVER" == "24.04" ]] || { echo "OS 는 22.04 또는 24.04" >&2; exit 1; }
 (($#)) || { echo "빌드할 단계를 지정할 것 (또는 all)" >&2; exit 1; }
 
-REPO="$HOME/k8s-offline/offline-install"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="docker.io/library/ubuntu:${OSVER}"
 
 # OS 에 의존하는 단계는 10-k8s 뿐이다. 나머지는 어느 이미지에서 만들어도 같다.

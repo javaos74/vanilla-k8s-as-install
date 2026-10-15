@@ -66,6 +66,7 @@ if [[ -s "$IMG_TAR" ]]; then
     log "이미 존재: $(basename "$IMG_TAR")"
 else
     log "받는 중: ${IMG_REF}"
+    rm -f "${IMG_TAR}.part"
     skopeo copy --retry-times 5 "docker://${IMG_REF}" \
         "docker-archive:${IMG_TAR}.part:${POSTGRES_IMAGE}" >/dev/null \
         || die "이미지 받기 실패: ${IMG_REF}"

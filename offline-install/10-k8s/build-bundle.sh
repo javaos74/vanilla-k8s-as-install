@@ -278,6 +278,7 @@ for img in "${K8S_IMAGES[@]}"; do
     log "이미지 받기: $img"
     # docker-archive 형식으로 저장한다. ctr images import 가 태그를 보존한 채
     # 그대로 읽을 수 있어 OCI layout 보다 취급이 단순하다.
+    rm -f "${out}.part"
     skopeo copy --retry-times 5 \
         "docker://${img}" \
         "docker-archive:${out}.part:${img}" >/dev/null \

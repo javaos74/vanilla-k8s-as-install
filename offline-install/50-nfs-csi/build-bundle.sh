@@ -217,6 +217,7 @@ for img in "${CSI_IMAGES[@]}"; do
     out="${IMG_DIR}/$(image_to_filename "$img").tar"
     [[ -s "$out" ]] && { log "이미 존재: $(basename "$out")"; continue; }
     log "이미지 받기: $img"
+    rm -f "${out}.part"
     skopeo copy --retry-times 5 "docker://${img}" "docker-archive:${out}.part:${img}" >/dev/null \
         || die "이미지 받기 실패: $img"
     mv "${out}.part" "$out"

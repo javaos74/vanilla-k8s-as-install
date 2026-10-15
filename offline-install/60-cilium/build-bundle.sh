@@ -172,6 +172,7 @@ for img in "${CILIUM_IMAGES[@]}"; do
         continue
     fi
     log "이미지 받기: $img"
+    rm -f "${out}.part"
     skopeo copy --retry-times 5 \
         "docker://${img}" "docker-archive:${out}.part:${img}" >/dev/null \
         || die "이미지 받기 실패: $img"

@@ -12,7 +12,14 @@
 # 결과: /opt/postgresql 에 PostgreSQL. TLS 활성, 5432 수신.
 #---------------------------------------------------------------------
 BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${BUNDLE_ROOT}/00-common/common.sh"
+COMMON_FILE="${BUNDLE_ROOT}/00-common/common.sh"
+if [[ ! -f "$COMMON_FILE" ]]; then
+    printf 'ERROR: 번들 공통 파일을 찾을 수 없습니다: %s\n' "$COMMON_FILE" >&2
+    printf '빌드 산출물 postgresql-<버전>.tar.gz 를 압축 해제한 디렉터리에서 install.sh 를 실행하세요.\n' >&2
+    printf '예: tar xzf postgresql-<버전>.tar.gz && cd postgresql-<버전> && sudo ./install.sh --check-only\n' >&2
+    exit 1
+fi
+source "$COMMON_FILE"
 
 MODE="install"
 case "${1:-}" in

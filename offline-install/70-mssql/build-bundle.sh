@@ -76,6 +76,7 @@ else
     log "받는 중: ${IMG_REF}"
     # docker-archive 는 다이제스트 참조를 태그로 보존하지 못하므로
     # 원래 태그를 명시해 적재 후에도 같은 이름으로 쓰이게 한다.
+    rm -f "${IMG_TAR}.part"
     skopeo copy --retry-times 5 "docker://${IMG_REF}" \
         "docker-archive:${IMG_TAR}.part:${MSSQL_SERVER_IMAGE}" >/dev/null \
         || die "이미지 받기 실패: ${IMG_REF}"

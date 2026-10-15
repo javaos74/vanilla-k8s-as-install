@@ -103,6 +103,7 @@ sudo ./install.sh
 | `PG_PASSWORD` | **비우면 무작위 생성**하고 설치 끝에 출력 |
 | `PG_SUPERUSER` | `postgres` |
 | `PG_TZ` | `Asia/Seoul` |
+| `PG_DATA_DIR` | 호스트 데이터 경로 `/data/postgresql`; 컨테이너의 `/var/lib/postgresql/data`에 마운트. 실제 PGDATA는 하위 `pgdata` |
 
 번들 크기는 145MB 다.
 

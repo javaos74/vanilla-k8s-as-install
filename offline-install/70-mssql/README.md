@@ -169,6 +169,7 @@ sudo ./install.sh                                 # 최초 기동은 DB 생성�
 | `MSSQL_SA_PASSWORD` | **비우면 무작위 생성**하고 설치 끝에 출력 |
 | `MSSQL_PID` | `Developer`. **운영은 Standard/Enterprise 필요** |
 | `MSSQL_MEM_LIMIT` | `4g` |
+| `MSSQL_DATA_DIR` | 호스트 데이터 경로 `/data/mssql`; 컨테이너의 `/var/opt/mssql`에 마운트 |
 | `MSSQL_COLLATION` | `versions.env` 에 있다. AS 가 요구하는 값 |
 
 ### 기동을 막는 세 가지

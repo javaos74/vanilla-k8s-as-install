@@ -22,6 +22,7 @@
 #   out/minio/public.crt private.key     MinIO (이 파일명을 요구한다)
 #   out/mssql/mssql.pem mssql.key        SQL Server (mssql.conf 가 참조)
 #   out/pgsql/server.crt server.key      PostgreSQL (ssl_cert_file 이 참조)
+#   out/redis/server.crt server.key      Redis OSS (TLS listener)
 #
 # 배포는 deploy-certs.sh 가 한다.
 #---------------------------------------------------------------------
@@ -84,6 +85,7 @@ TARGETS=(
     "minio|${MINIO_HOSTNAME:-}|${MINIO_HOST_IP:-}|yes|public.crt|private.key"
     "mssql|${MSSQL_HOSTNAME:-}|${MSSQL_HOST_IP:-}|no|mssql.pem|mssql.key"
     "pgsql|${PG_HOSTNAME:-}|${PG_HOST_IP:-}|no|server.crt|server.key"
+    "redis|${REDIS_HOSTNAME:-}|${REDIS_HOST_IP:-}|no|server.crt|server.key"
 )
 
 #=====================================================================
@@ -299,7 +301,7 @@ done
 ((${#SKIPPED[@]} == 0)) || {
     warn "호스트명이 비어 건너뛴 서비스: ${SKIPPED[*]}"
     warn "  site.env 에 AS_FQDN / HARBOR_HOSTNAME / MINIO_HOSTNAME /"
-    warn "  MSSQL_HOSTNAME / PG_HOSTNAME 을 채우면 발급된다."
+    warn "  MSSQL_HOSTNAME / PG_HOSTNAME / REDIS_HOSTNAME 을 채우면 발급된다."
 }
 
 #=====================================================================

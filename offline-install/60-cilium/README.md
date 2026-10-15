@@ -245,4 +245,4 @@ airgap-fwd-other = 0         <- 판정 통과
 ```
 
 노드가 `Ready` 가 됐으므로 이제 워크로드를 스케줄할 수 있다.
-다음은 `50-nfs-csi` 이며, NFS 서버는 `infra-01`(10.0.0.10)의 `/data/nfs` 를 쓴다.
+다음은 `50-nfs-csi` 이며, NFS 서버 주소와 서버 마운트/export 경로는 `site.env` 에서 지정한다.

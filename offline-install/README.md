@@ -38,13 +38,16 @@ apt 가 전이 의존성을 다시 내려받지 않아 번들에 구멍이 생�
 
 ```bash
 cd offline-install
-./00-common/build-in-container.sh 24.04 all       # 8단계 전부
+./00-common/build-in-container.sh 24.04 all       # 9단계 전부
 ./00-common/build-in-container.sh 22.04 10-k8s    # 22.04 용 (10-k8s 만 OS 의존)
 ./00-common/build-in-container.sh 24.04 30-harbor 70-mssql
 ```
 
 **rootless podman 을 쓰므로 sudo 가 필요 없다.** 매번 새 컨테이너를 띄우므로
 "깨끗한 호스트" 조건도 자동으로 만족한다.
+
+단, `45-redis`만 빌드할 때는 OS 패키지 다운로드가 없어 컨테이너를 생략하고
+호스트에서 직접 빌드한다. `skopeo`가 없으면 빌드 스크립트가 `sudo apt-get`으로 설치한다.
 
 단계 중 **OS 에 의존하는 것은 `10-k8s` 뿐**이다. deb 버전 문자열에 코드네임이
 들어가고(docker) OS 기본 패키지도 릴리스마다 다르기 때문이다. 나머지는 이미지·
@@ -79,7 +82,7 @@ deb 개수가 서버 빌드(23개)보다 많은 것은 정상이다. Ubuntu Serv
 
 ```
 10-k8s  →  05-certs  →  60-cilium  →  50-nfs-csi  →  40-haproxy  →  30-harbor  →  20-minio
-                                                      70-mssql · 80-postgresql (독립)
+                                                      45-redis · 70-mssql · 80-postgresql (독립)
 ```
 
 `05-certs` 는 사내 CA 하나로 모든 서비스 인증서를 발급하고 각 노드(master·worker)에
@@ -95,10 +98,11 @@ CNI 가 없으면 노드가 `NotReady` 이고 아무 워크로드도 스케줄�
 | 단계 | 내용 | 번들 크기 | 상태 |
 |---|---|---|---|
 | `10-k8s` | kubeadm, containerd, helm, docker, podman. 단일/다중 CP(HA) | 381M | 완료 (단일 CP 23/23, worker 24/24, **3-CP HA 각 28/28**) |
-| `05-certs` | 사내 CA + 서비스 인증서 5종, 노드 CA 신뢰 | 번들 없음 | 완료 (발급 36/36, 배포 11/11) |
+| `05-certs` | 사내 CA + 서비스 인증서 (Redis 포함) | 번들 없음 | 기존 5종 검증 완료, Redis 신규 추가 후 현장 확인 필요 |
 | `60-cilium` | CNI. 노드를 Ready 로 만든다 | 348M | 완료 (CP 9/9, worker 5/5) |
 | `50-nfs-csi` | NFS 서버 + csi-driver-nfs + StorageClass | 226M | 완료 (서버 11/11, CP 16/16, worker 6/6) |
 | `40-haproxy` | ingress L4 로드밸런서 | 45M | 완료 (11/11) |
+| `45-redis` | Redis OSS 단일 노드 (TLS) | 빌드 필요 | 신규 추가, 설치 판정 필요 |
 | `30-harbor` | 컨테이너 레지스트리 | 697M | 완료 (26/26, 재부팅 후 9/9) |
 | `20-minio` | S3 호환 오브젝트 스토리지 | 86M | 완료 (23/23) |
 | `70-mssql` | SQL Server 2022 + Full-Text Search | 1.3G | 완료 (19/19) |
@@ -107,9 +111,11 @@ CNI 가 없으면 노드가 `NotReady` 이고 아무 워크로드도 스케줄�
 `30-harbor` 는 443 을 직접 점유하므로 `40-haproxy` 와 같은 노드에 둘 수 없다.
 레지스트리는 클러스터 밖 별도 호스트에 두는 것을 권장한다.
 
-`70-mssql` 과 `80-postgresql` 은 k8s 에 올리지 않는다. UiPath AS 는 외부 DB 를
+`45-redis`, `70-mssql` 과 `80-postgresql` 은 k8s 에 올리지 않는 독립 서비스다.
+Redis OSS 단일 노드는 Redis Enterprise HAA와 같지 않으며, UiPath AS 외부 Redis endpoint
+지원 여부는 해당 버전의 지원 조건을 별도로 확인해야 한다. DB는 외부 DB를
 전제로 하며, 클러스터 장애가 DB 까지 끌고 가지 않도록 분리하는 것이 안전하다.
-두 단계는 다른 단계와 순서 의존이 없다.
+이들 단계는 다른 단계와 순서 의존이 없다.
 
 공식 mssql 이미지에는 **Full-Text Search 가 없어** 직접 빌드한 이미지를 쓴다.
 AS 는 FTS 를 요구하므로 공식 이미지로는 설치가 진행되지 않는다.
@@ -143,8 +149,16 @@ vi site.env            # NFS_SERVER_HOST, HARBOR_* 등을 자신의 환경 값�
 |---|---|
 | `SITE_PRIVATE_CIDR` | 에어갭 판정에서 "사내망"으로 허용할 대역. NFS export 기본 범위 |
 | `NFS_SERVER_HOST` | NFS 서버 사설 IP |
+| `NFS_MOUNT_PATH` | NFS 서버 데이터 디스크/LVM 마운트 지점 (기본값: `/data/nfs`) |
+| `NFS_EXPORT_PATH` | NFS 클라이언트에 공개할 경로. 마운트 지점과 같거나 하위 (기본값: `/data/nfs`) |
+| `NFS_ALLOWED_CIDR` | NFS export 접근 허용 대역. 미지정 시 `SITE_PRIVATE_CIDR` 사용 |
 | `HARBOR_HOSTNAME` / `HARBOR_PRIVATE_IP` | 사내 레지스트리. `/etc/hosts` 매핑에 쓰인다 |
 | `SITE_REACHABILITY_HOST` / `_PORT` | `airgap-on.sh` 의 사내망 도달 확인 대상 |
+| `MSSQL_DATA_DIR` | MSSQL 컨테이너 데이터에 마운트할 호스트 경로 (기본값: `/data/mssql`) |
+| `PG_DATA_DIR` | PostgreSQL 컨테이너 데이터에 마운트할 호스트 경로 (기본값: `/data/postgresql`) |
+| `REDIS_DATA_DIR` | Redis 컨테이너 데이터에 마운트할 호스트 경로 (기본값: `/data/redis`) |
+| `REDIS_HOSTNAME` / `REDIS_HOST_IP` | Redis 접속 DNS 이름 및 TLS 인증서/포트 노출용 서버 IP |
+| `REDIS_PORT` / `REDIS_PASSWORD` | Redis TLS 포트 (기본 `6379`) 및 인증 비밀번호 (미지정 시 자동 생성) |
 
 만들지 않아도 동작은 하지만 `site.env.example` 의 **예시 값**이 쓰이고 경고가 나온다.
 그 상태로는 NFS 마운트 등이 실패한다.
@@ -210,7 +224,7 @@ worker 추가는 `10-k8s/README.md` 4.0절을 볼 것. control plane 에서 발�
   make-certs.sh       사내 CA + 서비스 인증서 발급 (openssl 만 필요)
   deploy-certs.sh     노드에 CA 신뢰 설정 + 인증서 배치 (/opt/pki)
 10-k8s/ 20-minio/ 30-harbor/ 40-haproxy/ 50-nfs-csi/ 60-cilium/
-70-mssql/ 80-postgresql/
+45-redis/ 70-mssql/ 80-postgresql/
   build-bundle.sh     빌드 호스트에서 실행
   install.sh          타깃에서 root 로 실행. 설치 + 판정
   README.md           설계 근거·트러블슈팅

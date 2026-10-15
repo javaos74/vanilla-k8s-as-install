@@ -5,6 +5,7 @@
 #   ./build-in-container.sh 24.04 10-k8s
 #   ./build-in-container.sh 22.04 10-k8s
 #   ./build-in-container.sh 24.04 20-minio 30-harbor 40-haproxy
+#   ./build-in-container.sh 24.04 45-redis
 #   ./build-in-container.sh 24.04 all
 #
 # 왜 VM 이 아니라 컨테이너인가:
@@ -34,11 +35,20 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="docker.io/library/ubuntu:${OSVER}"
 
 # OS 에 의존하는 단계는 10-k8s 뿐이다. 나머지는 어느 이미지에서 만들어도 같다.
-ALL_STAGES=(10-k8s 20-minio 30-harbor 40-haproxy 50-nfs-csi 60-cilium 70-mssql 80-postgresql)
+ALL_STAGES=(10-k8s 20-minio 30-harbor 40-haproxy 45-redis 50-nfs-csi 60-cilium 70-mssql 80-postgresql)
 if [[ "$1" == "all" ]]; then
     STAGES=("${ALL_STAGES[@]}")
 else
     STAGES=("$@")
+fi
+
+# 45-redis 는 OS 패키지 번들이 아니라 amd64 Redis 이미지 하나만 받는다.
+# Ubuntu 컨테이너가 필요 없으므로 호스트에서 직접 빌드해 rootless Podman 의
+# user-namespace 재실행 제한을 우회한다.
+if ((${#STAGES[@]} == 1)) && [[ "${STAGES[0]}" == "45-redis" ]]; then
+    echo "Redis 빌드는 OS 독립적이므로 Podman 컨테이너 없이 호스트에서 실행합니다."
+    (cd "${REPO}/45-redis" && ./build-bundle.sh)
+    exit $?
 fi
 
 echo "=== 빌드 환경 ==="

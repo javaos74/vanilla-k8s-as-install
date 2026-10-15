@@ -775,6 +775,7 @@ DNS 차단으로 인한 소음이 거슬리면 `--allow-dns` 를 쓴다. 이름�
 | 증상 | 원인 | 조치 |
 |---|---|---|
 | `Version '29.8.1-1~ubuntu...' for 'docker-ce' was not found` | `docker-ce`/`docker-ce-cli` 의 apt 버전에는 **epoch `5:`** 가 붙는다. deb 파일명에는 없다 | `versions.env` 의 `DOCKER_DEB_EPOCH` 확인. `apt-cache madison docker-ce` 로 실제 문자열 대조 |
+| `dpkg` 에서 `docker-ce-cli` 설치 실패 또는 `docker-ce` 미설정 | `podman-docker` 가 `/usr/bin/docker` 를 점유해 CLI와 충돌한다 | 아래 `podman-docker` 충돌 해결 절차를 따른다 |
 | deb 일부만 받아짐 | `apt-get download` 는 인자 중 하나만 실패해도 **전체를 중단**한다 | 빌드 스크립트가 패키지별로 호출하고 실패 목록을 보고한다. 보고된 패키지의 버전을 `apt-cache madison` 으로 확인 |
 | `ctr images ls` 에는 보이는데 파드는 ImagePullBackOff | 이미지를 기본 네임스페이스에 적재했다 | `ctr -n k8s.io images import` 여야 한다. kubelet 은 `k8s.io` 네임스페이스만 본다 |
 | `control plane 파드 4종 Running` 판정 실패 | init 직후 static 파드가 아직 API 에 등록되지 않았다 | 판정에 120초 대기가 들어 있다. 계속 실패하면 `journalctl -u kubelet` 확인 |
@@ -788,6 +789,7 @@ DNS 차단으로 인한 소음이 거슬리면 `--allow-dns` 를 쓴다. 이름�
 | worker 의 PVC 파드가 `ContainerCreating` 에서 멈춤 | 그 노드에 `nfs-common` 또는 CSI 이미지가 없다 | worker 에서 `50-nfs-csi/install.sh --role worker` 실행 |
 | worker 재조인이 실패한다 | control plane 에 옛 노드 객체가 남아 있다 | `kubectl delete node <name>` 후 worker 에서 `--reset` → 재조인 |
 | CP 조인이 `error execution phase control-plane-prepare/download-certs` 로 실패 | `kubeadm-certs` Secret 이 만료됐다(2시간) | 첫 CP 에서 `./install.sh --print-join-command` 재실행해 새 키를 받는다 |
+
 | `--certificate-key 형태가 잘못됐다` | 키가 잘려서 붙여졌다 | 32바이트 AES 키의 hex 이므로 정확히 64자여야 한다 |
 | CP 조인이 etcd 단계에서 멈춘다 | CP 간 2379/2380 이 막혀 있다 | stacked etcd 는 CP 끼리 이 포트로 통신한다. 방화벽/NSG 확인 |
 | CP 를 추가했는데 첫 CP 가 죽으면 같이 멈춘다 | `controlPlaneEndpoint` 없이 init 했다 | 4.1절. 사실상 재구축이 필요하다 |
@@ -797,6 +799,23 @@ DNS 차단으로 인한 소음이 거슬리면 `--allow-dns` 를 쓴다. 이름�
 | LB 는 살아 있는데 모든 요청이 권한 오류 | LB 가 TLS 를 종료했다(L7 모드) | apiserver 는 클라이언트 인증서로 사용자를 식별한다. `mode tcp` 패스스루여야 한다 |
 | CP 1대를 reset 했더니 남은 CP 들이 쓰기 불가 | 유령 etcd 멤버가 남아 정족수를 잃었다 | 4.0.4절의 `etcdctl member remove` |
 | `etcd 멤버 수 == CP 노드 수` 판정 실패 | 조인이 중간에 실패했거나 제거된 CP 의 멤버가 남았다 | `etcdctl member list` 로 대조 후 불필요한 멤버 제거 |
+
+### `podman-docker` 와 Docker CLI 충돌
+
+`podman-docker` 패키지는 `/usr/bin/docker` 를 제공한다. 이 번들의 `docker-ce-cli` 도
+같은 경로를 설치하므로, 먼저 호환 패키지만 제거한 뒤 번들 설치를 다시 실행한다.
+`podman` 패키지는 제거되지 않지만 `docker` 명령은 Docker CE CLI로 전환된다.
+
+```bash
+cd ~/k8s-1.36.4-noble
+sudo dpkg --remove podman-docker
+sudo ./install.sh
+```
+
+`install.sh` 가 번들의 `docker-ce`, `docker-ce-cli`, `containerd.io` 및 관련 플러그인을
+설치한다. Kubernetes CRI 런타임은 Docker가 아니라 `containerd`다. `apt-get -f install`
+만 따로 실행하지 말 것. 오프라인 상태에서 의존성 복구를 시도하면 `docker-ce` 가
+제거될 수 있다.
 
 ### 로그 위치
 

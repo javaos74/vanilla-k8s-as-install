@@ -568,6 +568,10 @@ step "사전 확인"
 
 verify_manifest "$BUNDLE_ROOT"
 
+if [[ "$(dpkg-query -W -f='${db:Status-Status}' podman-docker 2>/dev/null || true)" == "installed" ]]; then
+    die "podman-docker 가 /usr/bin/docker 를 제공해 번들의 docker-ce-cli 와 충돌한다. podman 은 유지한 채 'sudo apt remove podman-docker' 후 설치를 다시 실행할 것."
+fi
+
 # 에어갭이 아니어도 설치는 되지만, 오프라인 검증이라면 경고를 남긴다.
 if is_online; then
     warn "인터넷에 연결된 상태다. 오프라인 설치를 '검증'하려면 90-verify/airgap-on.sh 를 먼저 실행할 것."
@@ -635,12 +639,13 @@ if command -v docker >/dev/null 2>&1; then
 fi
 
 # dpkg 로 한 번에 넣고 의존성 문제는 apt 로 정리한다(오프라인이라 다운로드 없음).
-dpkg -i "$DEB_DIR"/*.deb >/dev/null 2>&1 || {
+# 실패 출력을 숨기지 않아 패키지 충돌/의존성 문제를 바로 확인할 수 있게 한다.
+dpkg -i "$DEB_DIR"/*.deb || {
     log "dpkg 1차 실패 -> 의존성 정리 시도"
     DEBIAN_FRONTEND=noninteractive \
-    apt-get -o DPkg::Lock::Timeout=900 -f install -y --no-download >/dev/null 2>&1 \
+    apt-get -o DPkg::Lock::Timeout=900 -f install -y --no-download \
         || die "deb 의존성 해결 실패. 번들이 빌드 호스트와 다른 OS 용일 수 있다."
-    dpkg -i "$DEB_DIR"/*.deb >/dev/null 2>&1 || die "deb 설치 실패"
+    dpkg -i "$DEB_DIR"/*.deb || die "deb 설치 실패. 위 dpkg 오류를 확인할 것."
 }
 ok "deb 설치 완료"
 

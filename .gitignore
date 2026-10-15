@@ -26,6 +26,7 @@ join-*.txt
 
 # 에이전트 로컬 설정 — 실제 IP/인스턴스 ID 보유
 .kiro/
+.omc/
 
 # 치환 전 원본 백업
 _local/

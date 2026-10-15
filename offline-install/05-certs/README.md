@@ -1,6 +1,6 @@
 # 05-certs — 사내 CA 와 서비스 인증서
 
-CA 하나로 UiPath Automation Suite · Harbor · MinIO · SQL Server · PostgreSQL 의
+CA 하나로 UiPath Automation Suite · Harbor · MinIO · Redis OSS · SQL Server · PostgreSQL 의
 서버 인증서를 발급하고, 모든 노드에 CA 를 신뢰시킨다.
 
 에어갭 노드 3대에서 발급·배포·바인딩을 검증했다(8절).
@@ -21,7 +21,7 @@ CA 를 하나 두면 클라이언트는 **CA 1개만** 신뢰하면 되고, 서�
         │  Vanilla K8s Internal CA │  ← 노드에는 ca.crt 만 배포
         └────────────┬─────────────┘
      ┌──────┬────────┼────────┬────────┐
-    as   harbor    minio    mssql    pgsql      ← 서버 인증서 (키는 각 호스트)
+    as   harbor    minio    redis    mssql    pgsql      ← 서버 인증서 (키는 각 호스트)
 ```
 
 **`ca.key` 는 발급 호스트에만 둔다.** 노드에 두면 그 노드가 침해될 때 PKI 전체가
@@ -41,7 +41,8 @@ CA 를 하나 두면 클라이언트는 **CA 1개만** 신뢰하면 되고, 서�
     ├── harbor/harbor.crt harbor.key ca.crt
     ├── minio/public.crt private.key ca.crt
     ├── mssql/mssql.pem mssql.key ca.crt
-    └── pgsql/server.crt server.key ca.crt
+    ├── pgsql/server.crt server.key ca.crt
+    └── redis/server.crt server.key ca.crt
 ```
 
 번들(tar.gz)이 없다. `openssl` 은 Ubuntu 기본 설치에 포함되므로 받아올 것이 없고,
@@ -55,6 +56,7 @@ CA 를 하나 두면 클라이언트는 **CA 1개만** 신뢰하면 되고, 서�
 | Harbor | `harbor.crt` / `harbor.key` | `harbor.yml` 이 참조 |
 | SQL Server | `mssql.pem` / `mssql.key` | `mssql.conf` 가 참조 |
 | PostgreSQL | `server.crt` / `server.key` | `ssl_cert_file` 이 참조 |
+| Redis OSS | `server.crt` / `server.key` | TLS listener 가 참조 |
 | AS | `tls.crt` / `tls.key` + `fullchain.crt` | k8s TLS Secret 관례 |
 
 `fullchain.crt`(서버 인증서 + CA)도 함께 만든다. ingress 컨트롤러 등은 체인을
@@ -68,7 +70,7 @@ CA 를 하나 두면 클라이언트는 **CA 1개만** 신뢰하면 되고, 서�
 # 1) 호스트명을 먼저 채운다
 cd offline-install/00-common
 cp site.env.example site.env
-vi site.env     # AS_FQDN, HARBOR_HOSTNAME, MINIO_HOSTNAME, MSSQL_HOSTNAME, PG_HOSTNAME
+vi site.env     # AS_FQDN, HARBOR_HOSTNAME, MINIO_HOSTNAME, MSSQL_HOSTNAME, PG_HOSTNAME, REDIS_HOSTNAME
 
 # 2) 발급
 cd ../05-certs && ./make-certs.sh
@@ -204,6 +206,7 @@ TLS 검증을 통째로 끄는 설정이다. CA 를 신뢰시키면 검증을 �
 | `30-harbor` | `harbor.yml` 의 `certificate`/`private_key`. docker 신뢰에는 **CA** 를 넣는다 |
 | `70-mssql` | `mssql.conf` 의 `network.tlscert`/`tlskey` (아래) |
 | `80-postgresql` | `ssl_cert_file`/`ssl_key_file` |
+| `45-redis` | Redis OSS TLS listener |
 
 Harbor 의 docker 신뢰에 서버 인증서가 아니라 CA 를 넣는 것이 중요하다.
 서버 인증서를 넣으면 갱신할 때마다 모든 노드를 고쳐야 한다.
@@ -286,7 +289,7 @@ CA 자체를 바꿔야 한다면(`--rotate-ca`) 기존 인증서가 모두 무�
 
 | 항목 | 결과 |
 |---|---|
-| 발급 (CA + 서비스 5개) | **판정 36/36** |
+| 발급 (CA + 기존 서비스 5개) | **판정 36/36**; Redis 인증서 대상은 신규 추가되어 별도 현장 확인 필요 |
 | 배포 (노드 3대, OS·docker·containerd 신뢰 + /opt/pki) | **각 11/11** |
 | containerd `config_path` 가 올바른 섹션에 적용 | **통과** (30행 registry 섹션) |
 | containerd 재시작 후 k8s 정상 | **통과** (노드 Ready, 파드 12개 정상) |
@@ -343,7 +346,7 @@ errorlog: The certificate [Certificate File:'/var/opt/mssql/certs/mssql.pem',
 
 ```
 10-k8s → [05-certs] → 60-cilium → 50-nfs-csi → 40-haproxy → 30-harbor → 20-minio
-                                                70-mssql · 80-postgresql
+                              45-redis · 70-mssql · 80-postgresql
 ```
 
 UiPath AS 설치 시 `out/as/` 의 인증서를 쓴다. k8s TLS Secret 으로 넣는 예다.

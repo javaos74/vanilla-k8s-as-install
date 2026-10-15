@@ -4,7 +4,7 @@ k8s 노드에 NFS 동적 프로비저닝을 붙인다. 두 부분으로 나뉜�
 
 | 대상 | 스크립트 | 내용 |
 |---|---|---|
-| NFS 서버 (`infra-01` 10.0.0.10) | `setup-nfs-server.sh` | `nfs-kernel-server`, `/data/nfs`, `/etc/exports` |
+| NFS 서버 (`NFS_SERVER_HOST`) | `setup-nfs-server.sh` | `nfs-kernel-server`, site.env 경로, `/etc/exports` |
 | k8s 노드 (에어갭) | `install.sh` | `nfs-common` 확인, CSI 드라이버, snapshot-controller, StorageClass |
 
 NFS 서버는 **구성 완료·판정 11/11 통과**했고, 노드 쪽 CSI 설치도 두 OS 에서
@@ -16,26 +16,39 @@ NFS 서버는 **구성 완료·판정 11/11 통과**했고, 노드 쪽 CSI 설�
 
 NFS 서버를 k8s 노드 위에 두면 단일 노드 환경에서 스토리지와 워크로드가 같은 장애 도메인에
 묶인다. `hard` 마운트를 쓰기 때문에 서버가 멈추면 마운트를 가진 모든 파드의 I/O 가
-무한 대기한다. 그래서 서버는 클러스터 밖(`infra-01`)에 둔다.
+무한 대기한다. 권장 구성은 서버를 클러스터 밖에 두는 것이다. 현재 site.env 구성처럼
+worker (`10.32.99.4`)에 NFS 서버를 함께 두면 해당 노드 장애 시 NFS PVC도 함께 사용할 수
+없다는 점을 고려해야 한다.
 
-`infra-01` 에는 Harbor 가 운영 중이다. `setup-nfs-server.sh` 는 Harbor 를 건드리지
-않는다. 변경 범위는 `nfs-kernel-server` 패키지, `/data/nfs`, `/etc/exports` 뿐이다.
-스크립트가 실행 시 Harbor 가동을 감지하면 그 사실을 로그에 남긴다.
+NFS 서버는 `site.env` 의 `NFS_SERVER_HOST` 로 지정한다. `setup-nfs-server.sh` 는
+Harbor 를 건드리지 않는다. 변경 범위는 `nfs-kernel-server` 패키지, 설정된 export
+디렉터리, `/etc/exports` 뿐이다. 실행 전에 `NFS_MOUNT_PATH` 가 실제 마운트 지점인지
+확인하므로 디스크가 마운트되지 않은 상태에서 루트 파일시스템을 잘못 export 하지 않는다.
 
 ---
 
 ## 2. NFS 서버 구성
 
 ```bash
-# infra-01 에서
+# site.env 의 NFS_SERVER_HOST 에서
 sudo ./setup-nfs-server.sh
 sudo ./setup-nfs-server.sh --check-only     # 판정만
 ```
 
-적용되는 export 는 다음과 같다.
+`00-common/site.env` 에서 서버 데이터 디스크 마운트 경로, 클라이언트 공개 경로,
+접근 허용 대역을 설정한다. 공개 경로는 마운트 경로와 같거나 그 하위여야 한다.
+
+```bash
+NFS_SERVER_HOST="10.32.99.4"
+NFS_MOUNT_PATH="/data/nfs"
+NFS_EXPORT_PATH="/data/nfs"
+NFS_ALLOWED_CIDR="10.32.99.0/24"
+```
+
+적용되는 export 는 다음 예시와 같다.
 
 ```
-/data/nfs 10.0.0.0/16(rw,sync,no_subtree_check,no_root_squash,insecure)
+/data/nfs 10.32.99.0/24(rw,sync,no_subtree_check,no_root_squash,insecure)
 ```
 
 ### 옵션 선택 근거
@@ -72,7 +85,7 @@ mount.nfs: Operation not permitted    (exit 32)
 패키지·서비스·export 설정 외에 **실제 마운트 쓰기 테스트**를 한다.
 
 ```
-로컬 마운트 + 쓰기 테스트 (10.0.0.10)
+로컬 마운트 + 쓰기 테스트 (NFS_SERVER_HOST)
 ```
 
 여기서 `127.0.0.1` 로 마운트하면 안 된다. export 가 `10.0.0.0/16` 으로 제한돼 있고
@@ -153,7 +166,7 @@ Cilium 과 마찬가지로 **목록을 손으로 관리하지 않는다.** 실�
 | `nfs-csi` | Delete | **기본 클래스** |
 | `nfs-csi-retain` | Retain | PVC 삭제 후에도 데이터 보존 |
 
-공통 파라미터는 `server: 10.0.0.10`, `share: /data/nfs`, `mountPermissions: "0777"` 이고
+공통 파라미터는 `server: NFS_SERVER_HOST`, `share: NFS_EXPORT_PATH`, `mountPermissions: "0777"` 이고
 `mountOptions` 는 `nfsvers=4.1, hard, timeo=600, retrans=2` 다.
 
 `allowVolumeExpansion: true` 로 두었지만 **NFS 는 실제 용량 쿼터를 적용하지 않는다.**
@@ -171,7 +184,7 @@ PVC 의 용량 값은 사실상 라벨이다. 1Gi 를 요청해도 서버 디스
 cd offline-install/50-nfs-csi
 ./build-bundle.sh
 
-# NFS 서버 (infra-01)
+# NFS 서버 (site.env 의 NFS_SERVER_HOST)
 sudo ./setup-nfs-server.sh
 
 # 에어갭 k8s 노드
@@ -185,7 +198,7 @@ sudo ./install.sh
 설치 전에 두 가지를 먼저 막는다.
 
 - 노드가 `Ready` 가 아니면 중단한다. CNI 가 없으면 CSI 파드가 스케줄되지 않는다
-- `showmount -e 10.0.0.10` 가 실패하면 중단한다. 서버에 도달하지 못하면 뒤 단계가 모두 무의미하다
+- `showmount -e ${NFS_SERVER_HOST}` 가 실패하면 중단한다. 서버에 도달하지 못하면 뒤 단계가 모두 무의미하다
 
 ---
 

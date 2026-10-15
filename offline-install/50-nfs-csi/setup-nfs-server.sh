@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #---------------------------------------------------------------------
-# 50-nfs-csi : NFS 서버 구성 (infra-01 10.0.0.10 에서 root 로 실행)
+# 50-nfs-csi : site.env 의 NFS_SERVER_HOST 에서 root 로 실행
 #
 # 이 스크립트만 NFS "서버" 를 만든다. 각 k8s 노드에는 클라이언트(nfs-common)와
 # CSI 드라이버만 들어간다(install.sh).
 #
-# 이 호스트에는 Harbor 가 이미 운영 중이다. 이 스크립트는 Harbor 를 건드리지 않는다.
-# 건드리는 것은 nfs-kernel-server 패키지, /data/nfs 디렉터리, /etc/exports 뿐이다.
+# 이 스크립트는 Harbor 를 건드리지 않는다. 변경 범위는 nfs-kernel-server 패키지,
+# 설정된 export 디렉터리, /etc/exports 뿐이다.
 #
 #   sudo ./setup-nfs-server.sh              # 구성
 #   sudo ./setup-nfs-server.sh --check-only # 판정만
@@ -26,6 +26,15 @@ require_root
 
 # 내보낼 대역. k8s 노드가 있는 VNet 전체를 허용한다.
 NFS_ALLOWED_CIDR="${NFS_ALLOWED_CIDR:-${SITE_PRIVATE_CIDR}}"
+
+[[ "$NFS_MOUNT_PATH" == /* && "$NFS_EXPORT_PATH" == /* ]] \
+    || die "NFS_MOUNT_PATH 와 NFS_EXPORT_PATH 는 절대 경로여야 한다."
+NFS_MOUNT_REAL="$(realpath -m "$NFS_MOUNT_PATH")"
+NFS_EXPORT_REAL="$(realpath -m "$NFS_EXPORT_PATH")"
+case "$NFS_EXPORT_REAL" in
+    "$NFS_MOUNT_REAL"|"$NFS_MOUNT_REAL"/*) ;;
+    *) die "NFS_EXPORT_PATH (${NFS_EXPORT_PATH}) 는 NFS_MOUNT_PATH (${NFS_MOUNT_PATH}) 와 같거나 그 하위여야 한다." ;;
+esac
 
 #---------------------------------------------------------------------
 # export 옵션에 대한 판단
@@ -51,6 +60,7 @@ run_checks() {
     check "nfs-kernel-server 설치됨"  dpkg -s nfs-kernel-server
     check "nfs-server 서비스 active"  systemctl is-active --quiet nfs-server
     check "nfs-server 부팅 자동기동"   systemctl is-enabled --quiet nfs-server
+    check "NFS 데이터 디스크 마운트됨 (${NFS_MOUNT_PATH})" mountpoint -q "$NFS_MOUNT_PATH"
     check "${NFS_EXPORT_PATH} 존재"    test -d "$NFS_EXPORT_PATH"
     check "/etc/exports 에 항목 있음"  grep -q "^${NFS_EXPORT_PATH}[[:space:]]" /etc/exports
     check "exportfs 에 노출됨"         bash -c "exportfs -v | grep -q '${NFS_EXPORT_PATH}'"
@@ -83,7 +93,7 @@ run_checks() {
 if [[ "$MODE" == "check" ]]; then run_checks; exit $?; fi
 
 #=====================================================================
-step "NFS 서버 구성 (${NFS_EXPORT_PATH} -> ${NFS_ALLOWED_CIDR})"
+step "NFS 서버 구성 (${NFS_MOUNT_PATH} -> ${NFS_EXPORT_PATH} -> ${NFS_ALLOWED_CIDR})"
 
 # Harbor 를 건드리지 않음을 명시적으로 확인한다.
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^harbor-core$'; then
@@ -104,6 +114,8 @@ fi
 
 #--- 2. export 디렉터리 -----------------------------------------------
 step "export 디렉터리 준비"
+mountpoint -q "$NFS_MOUNT_PATH" \
+    || die "NFS_MOUNT_PATH 가 실제 마운트 지점이 아니다: ${NFS_MOUNT_PATH}. 디스크/LVM 마운트를 먼저 확인할 것."
 mkdir -p "$NFS_EXPORT_PATH"
 # 0777 은 넓다. 워크로드의 fsGroup 이 정해지면 좁힐 것을 권한다.
 # CSI 프로비저너가 하위 디렉터리를 만들고 파드가 임의 UID 로 쓰기 때문에

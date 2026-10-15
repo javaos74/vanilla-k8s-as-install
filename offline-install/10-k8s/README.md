@@ -830,8 +830,35 @@ sudo ./install.sh
 ## 8. 다음 단계
 
 ```
-10-k8s  →  60-cilium  →  50-nfs-csi  →  40-haproxy  →  30-harbor  →  20-minio
+10-k8s  →  60-cilium  →  Metrics Server  →  50-nfs-csi  →  40-haproxy  →  30-harbor  →  20-minio
 ```
 
 CNI 가 없으면 아무 워크로드도 스케줄되지 않으므로 **60-cilium 을 먼저** 적용한다.
 번호 순서가 아니라 위 순서를 따를 것.
+
+### 8.1 UiPath 사전 점검용 Metrics Server
+
+Metrics Server 는 별도 서버가 아니라 클러스터 안에 배포하는 애드온이다. kubeadm 은
+이를 기본 설치하지 않는다. UiPath Automation Suite 사전 점검과 `kubectl top nodes` 가
+노드 CPU·메모리 메트릭을 읽을 수 있도록 **Cilium 적용 후, UiPath 사전 점검 전에** 설치한다.
+Prometheus/Grafana 대체재가 아니며 기본 리소스 메트릭 API 만 제공한다.
+
+설치할 Metrics Server 버전은 승인된 Kubernetes 버전과의 공식 호환성 표에 맞춰 고정한다.
+번들 방식에서는 해당 릴리스의 `components.yaml` 과 이미지 태그를 기록하고 체크섬을 검증한다.
+제한망에서는 이미지가 노드의 containerd 에 미리 적재되어 있거나 노드에서 접근 가능한
+레지스트리에 있어야 한다. Kubernetes 런타임은 containerd 이므로 Docker/Podman 이미지
+저장소에만 적재해서는 안 된다.
+
+```bash
+# 승인된 Metrics Server 릴리스의 components.yaml 을 적용
+kubectl apply -f components.yaml
+kubectl -n kube-system rollout status deployment/metrics-server --timeout=180s
+kubectl get apiservice v1beta1.metrics.k8s.io
+kubectl top nodes
+```
+
+APIService 가 `Available=True` 여야 하며, 잠시 기다린 뒤 `kubectl top nodes` 에서
+control plane 과 worker 모두 메트릭이 보여야 한다. Metrics Server 에서 각 노드 kubelet 의
+TCP `10250` 으로, API server 에서 Metrics Server Pod 로 통신할 수 있어야 한다.
+`--kubelet-insecure-tls` 는 인증서 검증을 끄므로 운영 설정의 기본값으로 사용하지 말고,
+TLS 오류가 있으면 kubelet 인증서와 CA 신뢰를 먼저 점검한다.

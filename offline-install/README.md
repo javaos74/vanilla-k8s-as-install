@@ -81,7 +81,7 @@ deb 개수가 서버 빌드(23개)보다 많은 것은 정상이다. Ubuntu Serv
 ## 2. 적용 순서 — 번호순이 아니다
 
 ```
-10-k8s  →  05-certs  →  60-cilium  →  50-nfs-csi  →  40-haproxy  →  30-harbor  →  20-minio
+10-k8s  →  05-certs  →  60-cilium  →  Metrics Server  →  50-nfs-csi  →  40-haproxy  →  30-harbor  →  20-minio
                                                       45-redis · 70-mssql · 80-postgresql (독립)
 ```
 
@@ -95,11 +95,16 @@ CNI 가 없으면 노드가 `NotReady` 이고 아무 워크로드도 스케줄�
 `10-k8s` 다음에 **`60-cilium` 을 먼저** 적용한다. 디렉터리 번호는 구성요소 분류이지
 실행 순서가 아니다.
 
+UiPath Automation Suite 를 설치할 클러스터에는 Cilium 준비 후 Metrics Server 를 별도
+애드온으로 배포한다. kubeadm 번들에는 포함되지 않으며, 제한망에서는 버전 고정한
+manifest 와 이미지를 함께 준비한다. 자세한 설치·검증은 `10-k8s/README.md` 8.1절을 본다.
+
 | 단계 | 내용 | 번들 크기 | 상태 |
 |---|---|---|---|
 | `10-k8s` | kubeadm, containerd, helm, docker, podman. 단일/다중 CP(HA) | 381M | 완료 (단일 CP 23/23, worker 24/24, **3-CP HA 각 28/28**) |
 | `05-certs` | 사내 CA + 서비스 인증서 (Redis 포함) | 번들 없음 | 기존 5종 검증 완료, Redis 신규 추가 후 현장 확인 필요 |
 | `60-cilium` | CNI. 노드를 Ready 로 만든다 | 348M | 완료 (CP 9/9, worker 5/5) |
+| Metrics Server | UiPath 노드 메트릭 사전 점검 및 `kubectl top` | 별도 애드온 | Cilium 이후 설치, `kubectl top nodes` 로 검증 |
 | `50-nfs-csi` | NFS 서버 + csi-driver-nfs + StorageClass | 226M | 완료 (서버 11/11, CP 16/16, worker 6/6) |
 | `40-haproxy` | ingress L4 로드밸런서 | 45M | 완료 (11/11) |
 | `45-redis` | Redis OSS 단일 노드 (TLS) | 빌드 필요 | 신규 추가, 설치 판정 필요 |

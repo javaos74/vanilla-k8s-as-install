@@ -65,7 +65,7 @@ Do not begin installation until all items below are confirmed:
 ## Artifact Preparation on the Jump Host
 
 1. Record target OS release and architecture from both nodes.
-2. Both target nodes run Ubuntu `24.04`; on a clean Ubuntu `24.04` build environment, create the repository's Kubernetes bundle and confirm the artifact is named `k8s-1.36.4-noble.tar.gz` with `target_os: Ubuntu 24.04` in `BUNDLE-INFO`. Create the Cilium bundle in the same build run. Include the NFS CSI bundle only if NFS is an approved persistent-volume backend.
+2. Both target nodes run Ubuntu `24.04`; on a clean Ubuntu `24.04` build environment, create the repository's Kubernetes bundle and confirm the artifact is named `k8s-1.36.4-noble.tar.gz` with `target_os: Ubuntu 24.04` in `BUNDLE-INFO`. Create the Cilium bundle in the same build run. Include the NFS CSI bundle only if NFS is an approved persistent-volume backend. Select a Metrics Server release compatible with the approved Kubernetes version and prepare its pinned manifest and image for the limited-egress deployment.
 3. Verify every bundle SHA-256 digest before transfer.
 4. Download the `2.2510.4` Automation Suite installer, `versions.json`, manifests, license artifacts, and other installation files on the jump host.
 5. Verify artifact checksums and transfer them to the target nodes through the controlled transfer process.
@@ -95,6 +95,8 @@ Do not begin installation until all items below are confirmed:
 - [ ] Join with `--role worker` and the join command generated on `.3`.
 - [ ] Apply the Cilium bundle in worker mode so the node has its required CNI images before DaemonSet scheduling.
 - [ ] Verify the worker is `Ready`, the Cilium pod is running on it, and cross-node pod networking works.
+- [ ] Deploy the pinned Metrics Server release after both nodes are `Ready`; verify the `v1beta1.metrics.k8s.io` APIService is `Available=True` and `kubectl top nodes` reports both nodes.
+- [ ] Confirm Metrics Server can scrape both kubelets over node-to-node TCP `10250` before running UiPath prerequisite checks.
 
 ### 4. Persistent storage and ingress
 

@@ -85,7 +85,7 @@ check "k8s apt 서명키"                          http_ok "$K8S_APT_KEY_URL"
 step "컨테이너 런타임 / Docker (deb)"
 # containerd.io 는 containerd + ctr + shim + runc 를 모두 제공하므로
 # 별도 runc / cni-plugins tarball 검증 항목이 없다.
-for cn in jammy noble; do
+for cn in jammy noble resolute; do
     osv="$(codename_to_osversion "$cn")"
     check "containerd.io ${CONTAINERD_VERSION} (${cn})" \
         http_ok "$(deb_url "$cn" "containerd.io_${CONTAINERD_VERSION}-${CONTAINERD_DEB_REVISION}~ubuntu.${osv}~${cn}_${BUNDLE_ARCH}.deb")"

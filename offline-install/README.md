@@ -1,6 +1,6 @@
 # offline-install — 에어갭 환경 Vanilla K8s 및 UiPath Automation Suite 오프라인 설치 가이드
 
-인터넷에 연결되지 않은 완전 폐쇄망(Air-gapped) 환경의 Ubuntu 22.04 / 24.04 노드에 **Kubernetes v1.36.4** 클러스터를 구축하고, 그 위에 **UiPath Automation Suite(v2.2510.4)** 및 필수 인프라 서비스(NFS-CSI, MinIO, Harbor, HAProxy, MSSQL/PostgreSQL, Redis)를 단계별로 설치·운영하기 위한 종합 엔드투엔드 가이드입니다.
+인터넷에 연결되지 않은 완전 폐쇄망(Air-gapped) 환경의 Ubuntu 22.04 / 24.04 / 26.04 노드에 **Kubernetes v1.36.4** 클러스터를 구축하고, 그 위에 **UiPath Automation Suite(v2.2510.4)** 및 필수 인프라 서비스(NFS-CSI, MinIO, Harbor, HAProxy, MSSQL/PostgreSQL, Redis)를 단계별로 설치·운영하기 위한 종합 엔드투엔드 가이드입니다.
 
 > [!NOTE]
 > 저장소 루트의 `README.md`는 인터넷이 연결된 환경 기준의 온라인 설치 절차입니다.  
@@ -55,7 +55,7 @@ flowchart TD
 
 | 구성 요소 | 버전 | 유형 / 배포 방식 | 비고 |
 |---|---|---|---|
-| **OS** | Ubuntu 22.04 LTS / 24.04 LTS | Linux Host (amd64) | 10-k8s deb 빌드 시 OS 코드네임 일치 필수 |
+| **OS** | Ubuntu 22.04 / 24.04 / 26.04 LTS | Linux Host (amd64) | 10-k8s deb 빌드 시 OS 코드네임 일치 필수 |
 | **Kubernetes** | **v1.36.4** | deb / kubeadm, containerd v2.3.5 | CRI: containerd (`SystemdCgroup = true`) |
 | **CNI (Cilium)** | **v1.20.2** | Helm 차트 + 컨테이너 이미지 | VXLAN tunnel (UDP 8472), kube-proxy 유지 |
 | **Metrics Server** | **v0.9.0** | K8s 애드온 Manifest | `--kubelet-insecure-tls` 적용 |

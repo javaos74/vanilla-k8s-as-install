@@ -36,7 +36,7 @@ die()  { echo "${_C_RED}[$(_ts)] FATAL${_C_RST} $*" >&2; exit 1; }
 step() { echo; echo "${_C_BLU}=== $* ===${_C_RST}"; }
 
 #--- 환경 판별 ---------------------------------------------------------
-# Ubuntu 코드네임(jammy/noble)을 반환. 지원 목록 밖이면 즉시 중단한다.
+# Ubuntu 코드네임(jammy/noble/resolute)을 반환. 지원 목록 밖이면 즉시 중단한다.
 detect_codename() {
     local cn
     [[ -r /etc/os-release ]] || die "/etc/os-release 를 읽을 수 없음 (Ubuntu 가 아닌가?)"
@@ -57,9 +57,10 @@ detect_arch() {
 # docker-ce_<ver>-1~ubuntu.22.04~jammy_amd64.deb 형태라 둘 다 필요하다.
 codename_to_osversion() {
     case "$1" in
-        jammy) echo "22.04" ;;
-        noble) echo "24.04" ;;
-        *)     die "알 수 없는 코드네임: $1" ;;
+        jammy)    echo "22.04" ;;
+        noble)    echo "24.04" ;;
+        resolute) echo "26.04" ;;
+        *)        die "알 수 없는 코드네임: $1" ;;
     esac
 }
 

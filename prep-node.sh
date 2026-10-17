@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepare an Ubuntu 22.04 node for kubeadm (Kubernetes v1.36).
+# Prepare an Ubuntu 22.04 / 24.04 / 26.04 node for kubeadm (Kubernetes v1.36).
 # Idempotent: safe to re-run.
 # Usage: sudo ./prep-node.sh <desired-hostname>
 set -euo pipefail

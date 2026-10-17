@@ -64,19 +64,21 @@ CONF_DIR="${BUNDLE_ROOT}/conf"
 # 다르므로 흔한 경로를 훑는다.
 #=====================================================================
 ensure_nfs_common() {
-    if dpkg -s nfs-common >/dev/null 2>&1; then
-        ok "nfs-common 이미 설치됨"
+    if pkg_installed "$PKG_NFS_CLIENT"; then
+        ok "${PKG_NFS_CLIENT} 이미 설치됨"
         return 0
     fi
-    local deb
-    deb="$(ls /root/k8s-*/debs/nfs-common_*.deb \
-              /root/deploy*/k8s-*/debs/nfs-common_*.deb \
-              /home/*/k8s-*/debs/nfs-common_*.deb \
-              /home/*/deploy*/k8s-*/debs/nfs-common_*.deb \
-              "${BUNDLE_ROOT}"/debs/nfs-common_*.deb 2>/dev/null | head -1)"
-    [[ -n "$deb" ]] || die "nfs-common 이 없다. 10-k8s 번들의 debs/nfs-common_*.deb 를 설치할 것."
-    dpkg -i "$deb" >/dev/null || die "nfs-common 설치 실패"
-    ok "nfs-common 설치 ($(basename "$deb"))"
+    local pkg g sub="$PKG_BUNDLE_SUBDIR"
+    g="$(pkg_file_glob "$PKG_NFS_CLIENT")"
+    # shellcheck disable=SC2086  # glob 확장이 목적이다
+    pkg="$(ls /root/k8s-*/${sub}/${g} \
+              /root/deploy*/k8s-*/${sub}/${g} \
+              /home/*/k8s-*/${sub}/${g} \
+              /home/*/deploy*/k8s-*/${sub}/${g} \
+              "${BUNDLE_ROOT}"/${sub}/${g} 2>/dev/null | head -1)"
+    [[ -n "$pkg" ]] || die "${PKG_NFS_CLIENT} 이 없다. 10-k8s 번들의 ${sub}/${g} 를 설치할 것."
+    pkg_install_file "$pkg" || die "${PKG_NFS_CLIENT} 설치 실패"
+    ok "${PKG_NFS_CLIENT} 설치 ($(basename "$pkg"))"
 }
 
 #=====================================================================
@@ -90,7 +92,7 @@ run_worker_checks() {
     local img
 
     check "조인 완료(kubelet.conf 존재)" test -f "$KC"
-    check "nfs-common 설치됨"            dpkg -s nfs-common
+    check "${PKG_NFS_CLIENT} 설치됨"            pkg_installed "$PKG_NFS_CLIENT"
     check "mount.nfs4 존재"              test -x /sbin/mount.nfs4
     check "NFS 서버 ${NFS_SERVER_HOST} export 조회" \
         bash -c "showmount -e ${NFS_SERVER_HOST} | grep -q '${NFS_EXPORT_PATH}'"
@@ -121,7 +123,7 @@ run_worker_checks() {
 run_checks() {
     step "설치 상태 판정 (역할: control-plane)"
 
-    check "nfs-common 설치됨(노드 마운트용)" dpkg -s nfs-common
+    check "${PKG_NFS_CLIENT} 설치됨(노드 마운트용)" pkg_installed "$PKG_NFS_CLIENT"
     check "mount.nfs4 존재"                  test -x /sbin/mount.nfs4
 
     # 노드에서 NFS 서버에 직접 도달하는지. 여기서 실패하면 CSI 도 실패한다.
@@ -256,7 +258,7 @@ if [[ "$ROLE" == "worker" ]]; then
         || die "조인되지 않은 노드다. 10-k8s 를 --role worker 로 먼저 실행할 것."
     ok "조인 상태 확인 (kubelet.conf)"
 
-    step "nfs-common 확인"
+    step "${PKG_NFS_CLIENT} 확인"
     ensure_nfs_common
     showmount -e "$NFS_SERVER_HOST" >/dev/null 2>&1 \
         || die "NFS 서버 ${NFS_SERVER_HOST} 에 도달할 수 없다. 방화벽과 export 를 확인할 것."
@@ -305,7 +307,7 @@ ok "노드 Ready 확인"
 #=====================================================================
 # 1. nfs-common (노드 마운트에 필요)
 #=====================================================================
-step "nfs-common 확인"
+step "${PKG_NFS_CLIENT} 확인"
 ensure_nfs_common
 
 # NFS 서버 도달을 먼저 확인한다. 여기서 막히면 뒤 단계가 모두 무의미하다.

@@ -48,7 +48,7 @@ mkdir -p "$IMG_DIR" "$BIN_DIR" "$CHART_DIR" "$CONF_DIR"
 step "빌드 도구 확인"
 if ! command -v skopeo >/dev/null 2>&1; then
     log "skopeo 설치"
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq skopeo
+    pkg_install_build_tool skopeo
 fi
 ok "skopeo $(skopeo --version | awk '{print $3}')"
 
@@ -197,6 +197,7 @@ else
     warn "site.env 가 없어 예시 값으로 번들을 만든다. 타깃에서 값을 채워야 한다."
 fi
 cp "${SCRIPT_DIR}/../00-common/common.sh"    "${BUNDLE_DIR}/00-common/"
+cp -R "${SCRIPT_DIR}/../00-common/os"        "${BUNDLE_DIR}/00-common/"
 cp "${SCRIPT_DIR}/install.sh"                "${BUNDLE_DIR}/"
 cp "${SCRIPT_DIR}/README.md"                 "${BUNDLE_DIR}/" 2>/dev/null || true
 chmod +x "${BUNDLE_DIR}/install.sh"

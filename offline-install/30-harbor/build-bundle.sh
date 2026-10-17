@@ -369,6 +369,7 @@ else
     warn "site.env 가 없어 예시 값으로 번들을 만든다. 타깃에서 값을 채워야 한다."
 fi
 cp "${SCRIPT_DIR}/../00-common/common.sh" "${BUNDLE_DIR}/00-common/"
+cp -R "${SCRIPT_DIR}/../00-common/os"     "${BUNDLE_DIR}/00-common/"
 cp "${SCRIPT_DIR}/install.sh"             "${BUNDLE_DIR}/"
 cp "${SCRIPT_DIR}/README.md"              "${BUNDLE_DIR}/" 2>/dev/null || true
 chmod +x "${BUNDLE_DIR}/install.sh"

@@ -135,6 +135,23 @@ sha256sum -c seaweedfs-4.48.tar.gz.sha256      # SeaweedFS 를 쓰는 경우
 
 ---
 
+### 2.4 OS 계열 분리 계층 ([`00-common/os/`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/00-common/os/detect.sh))
+
+OS 마다 달라지는 부분(패키지 관리자, CA 신뢰 저장소, 패키지 이름)은 `00-common/os/` 에 모았습니다. 단계 스크립트는 `pkg_installed`, `pkg_install_bundle_dir`, `ca_trust_update` 같은 공통 함수만 호출합니다. RHEL 계열을 추가해도 단계 스크립트를 복제하지 않기 위한 구조입니다.
+
+| 파일 | 역할 |
+|---|---|
+| `os/detect.sh` | `/etc/os-release` 로 `OS_FAMILY`(debian / rhel / unknown) 판별, 인터페이스 정의, 계열 파일 로드 |
+| `os/debian.sh` | Ubuntu 구현 (apt / dpkg / `update-ca-certificates`) |
+| `10-k8s/pkgs-debian.sh` | 10-k8s 번들의 deb 수집(빌드 전용) |
+
+- 모든 번들의 `00-common/` 에 `os/` 가 함께 들어갑니다.
+- 구현이 없는 계열에서 OS 기능을 호출하면 `이 OS 에서는 아직 지원하지 않는 기능: <함수>` 로 중단합니다.
+- macOS 관리 호스트처럼 `/etc/os-release` 가 없는 곳에서도 `common.sh` 는 읽힙니다(`OS_FAMILY=unknown`). `make-certs.sh` 처럼 OS 와 무관한 스크립트는 그대로 동작합니다.
+- 현재 구현은 debian 계열뿐입니다. RHEL / Rocky 는 `os/rhel.sh` 와 `10-k8s/pkgs-rhel.sh` 를 추가하는 방식으로 지원할 예정입니다.
+
+---
+
 ## 3. Phase 1: Kubernetes 클러스터 구축 (k8s Installation)
 
 ### 3.1 Control-Plane 노드 설치 ([`10-k8s`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/10-k8s/README.md))

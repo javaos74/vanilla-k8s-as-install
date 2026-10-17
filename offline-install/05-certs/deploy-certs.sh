@@ -12,7 +12,7 @@
 #   --ssh-key  <경로>   기본 ~/.ssh/devops.pem
 #
 # 하는 일 네 가지:
-#   1) OS 신뢰 저장소에 CA 추가 (update-ca-certificates)
+#   1) OS 신뢰 저장소에 CA 추가 (Ubuntu: update-ca-certificates. os/<계열>.sh)
 #   2) docker 가 사내 레지스트리 인증서를 신뢰하도록 certs.d 배치
 #   3) containerd(k8s) 가 신뢰하도록 certs.d + config_path 설정
 #   4) 서비스 인증서를 /opt/pki 아래로 배치 (각 install.sh 가 여기서 읽는다)
@@ -60,11 +60,11 @@ run_checks() {
     step "CA 신뢰 및 인증서 배치 판정"
 
     check "OS 신뢰 저장소에 CA 설치됨" \
-        test -f "/usr/local/share/ca-certificates/${CA_TRUST_NAME}.crt"
-    # update-ca-certificates 가 실제로 반영했는지. 파일만 두고 갱신을
+        test -f "$(ca_trust_anchor_file "$CA_TRUST_NAME")"
+    # 신뢰 저장소 갱신(update-ca-certificates 등)이 실제로 반영됐는지. 파일만 두고 갱신을
     # 잊으면 신뢰되지 않는다.
     check "ca-certificates 번들에 반영됨" bash -c "
-        openssl crl2pkcs7 -nocrl -certfile /etc/ssl/certs/ca-certificates.crt 2>/dev/null \
+        openssl crl2pkcs7 -nocrl -certfile '$(ca_trust_bundle_file)' 2>/dev/null \
           | openssl pkcs7 -print_certs -noout 2>/dev/null | grep -q '${CA_CN_PATTERN:-Internal CA}'"
 
     if [[ -n "$REGISTRY_HOST" ]]; then
@@ -99,10 +99,9 @@ apply_local() {
 
     #--- 1) OS 신뢰 저장소 -------------------------------------------
     step "OS 신뢰 저장소에 CA 추가"
-    # 확장자가 .crt 여야 update-ca-certificates 가 인식한다.
-    # .pem 으로 두면 조용히 무시된다.
-    install -D -m 0644 "$CA_CRT" "/usr/local/share/ca-certificates/${CA_TRUST_NAME}.crt"
-    update-ca-certificates >/dev/null 2>&1 || die "update-ca-certificates 실패"
+    # 경로·확장자 규칙은 계열마다 다르다(Ubuntu 는 .crt 가 아니면 조용히 무시된다).
+    install -D -m 0644 "$CA_CRT" "$(ca_trust_anchor_file "$CA_TRUST_NAME")"
+    ca_trust_update || die "CA 신뢰 저장소 갱신 실패"
     ok "CA 추가 및 번들 갱신 완료"
 
     #--- 2) docker ----------------------------------------------------

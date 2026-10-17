@@ -57,7 +57,7 @@ EXPORT_OPTS="rw,sync,no_subtree_check,no_root_squash,insecure"
 run_checks() {
     step "NFS 서버 판정"
 
-    check "nfs-kernel-server 설치됨"  dpkg -s nfs-kernel-server
+    check "${PKG_NFS_SERVER} 설치됨"  pkg_installed "$PKG_NFS_SERVER"
     check "nfs-server 서비스 active"  systemctl is-active --quiet nfs-server
     check "nfs-server 부팅 자동기동"   systemctl is-enabled --quiet nfs-server
     check "NFS 데이터 디스크 마운트됨 (${NFS_MOUNT_PATH})" mountpoint -q "$NFS_MOUNT_PATH"
@@ -101,15 +101,14 @@ if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^harbor-core$'; then
 fi
 
 #--- 1. 패키지 --------------------------------------------------------
-if ! dpkg -s nfs-kernel-server >/dev/null 2>&1; then
-    step "nfs-kernel-server 설치"
-    # 이 호스트는 온라인이다. 오프라인 노드용 deb 는 10-k8s 번들에 포함돼 있다.
-    is_online || die "이 호스트에 인터넷이 필요하다(nfs-kernel-server 설치)."
-    DEBIAN_FRONTEND=noninteractive apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=900 nfs-kernel-server
-    ok "nfs-kernel-server 설치 완료"
+if ! pkg_installed "$PKG_NFS_SERVER"; then
+    step "${PKG_NFS_SERVER} 설치"
+    # 이 호스트는 온라인이다. 오프라인 노드용 패키지는 10-k8s 번들에 포함돼 있다.
+    is_online || die "이 호스트에 인터넷이 필요하다(${PKG_NFS_SERVER} 설치)."
+    pkg_install_online "$PKG_NFS_SERVER"
+    ok "${PKG_NFS_SERVER} 설치 완료"
 else
-    ok "nfs-kernel-server 이미 설치됨"
+    ok "${PKG_NFS_SERVER} 이미 설치됨"
 fi
 
 #--- 2. export 디렉터리 -----------------------------------------------

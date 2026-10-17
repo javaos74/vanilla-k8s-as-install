@@ -36,19 +36,14 @@ die()  { echo "${_C_RED}[$(_ts)] FATAL${_C_RST} $*" >&2; exit 1; }
 step() { echo; echo "${_C_BLU}=== $* ===${_C_RST}"; }
 
 #--- 환경 판별 ---------------------------------------------------------
-# Ubuntu 코드네임(jammy/noble/resolute)을 반환. 지원 목록 밖이면 즉시 중단한다.
-detect_codename() {
-    local cn
-    [[ -r /etc/os-release ]] || die "/etc/os-release 를 읽을 수 없음 (Ubuntu 가 아닌가?)"
-    cn="$(. /etc/os-release && echo "${VERSION_CODENAME:-}")"
-    [[ -n "$cn" ]] || die "VERSION_CODENAME 을 확인할 수 없음"
-    grep -qw "$cn" <<<"$SUPPORTED_CODENAMES" \
-        || die "지원하지 않는 OS: $cn (지원: $SUPPORTED_CODENAMES)"
-    echo "$cn"
-}
+# OS 계열별 구현(패키지 관리자 · CA 신뢰 저장소 · 패키지 이름)은 os/ 아래에 있다.
+# OS_ID / OS_FAMILY 등을 설정하고 계열 파일을 읽는다. 인터페이스는 os/detect.sh.
+# Ubuntu 코드네임 판별(detect_codename)은 os/debian.sh 로 옮겼다.
+source "${COMMON_DIR}/os/detect.sh"
 
+# 아키텍처가 번들과 같은지 확인한다(amd64 전용).
 detect_arch() {
-    local a; a="$(dpkg --print-architecture)"
+    local a; a="$(os_native_arch)"
     [[ "$a" == "$BUNDLE_ARCH" ]] || die "지원하지 않는 아키텍처: $a (번들은 $BUNDLE_ARCH 전용)"
     echo "$a"
 }
@@ -207,23 +202,6 @@ install_file() {
     fi
     install -D -m "$mode" "$src" "$dst"
     ok "설치: $dst"
-}
-
-# apt 를 오프라인(로컬 deb 만)으로 실행한다.
-# dpkg lock 경쟁(unattended-upgrades)으로 exit 100 이 나는 것을 막기 위해
-# Lock::Timeout 을 준다. 기존 운영 클러스터에서 실제로 겪은 문제다.
-apt_offline_install() {
-    local deb_dir="$1"
-    require_root
-    log "로컬 deb 설치: $deb_dir"
-    DEBIAN_FRONTEND=noninteractive \
-    apt-get -o Debug::NoLocking=0 \
-            -o DPkg::Lock::Timeout=900 \
-            -o Dir::Etc::sourcelist=/dev/null \
-            -o Dir::Etc::sourceparts=/dev/null \
-            -o APT::Get::List-Cleanup=0 \
-            install -y --no-download --allow-downgrades "$deb_dir"/*.deb \
-        || die "deb 설치 실패: $deb_dir"
 }
 
 #--- 판정 --------------------------------------------------------------

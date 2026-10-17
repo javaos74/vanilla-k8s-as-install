@@ -37,9 +37,9 @@ k8s-1.36.4-<codename>/
 ├── BUNDLE-INFO           빌드 시점·버전 요약
 ├── SHA256SUMS            44개 파일 체크섬
 ├── install.sh            설치 스크립트
-├── 00-common/            versions.env + common.sh (자기완결)
+├── 00-common/            versions.env + common.sh + os/ (자기완결)
 ├── 90-verify/            airgap-on.sh / airgap-off.sh
-├── debs/                 deb 23개 (187MB)
+├── debs/                 deb 37개 (26.04 기준, 194MB)
 ├── images/               이미지 7개 (docker-archive tar)
 ├── bin/                  helm, podman-static(+서명)
 └── conf/                 kubeadm-init.yaml, kubeadm-join.yaml, images.list,
@@ -93,63 +93,83 @@ cd ../10-k8s
 `kubeadm` 은 설치하지 않는다. deb 에서 `dpkg-deb -x` 로 바이너리만 꺼내
 이미지 목록을 얻으므로 빌드 호스트가 오염되지 않는다.
 
-#### 빌드 호스트는 같은 OS 이면서 **깨끗해야** 한다
+#### 전이 의존성은 빌드 호스트 상태와 무관하게 계산한다
 
-같은 OS 여야 하는 것만으로는 부족하다. **대상 패키지가 이미 설치돼 있으면
-번들에 구멍이 생긴다.**
+빌드 호스트는 대상과 **같은 OS** 여야 한다. 하지만 무엇이 설치돼 있는지는 더 이상
+번들 내용에 영향을 주지 않는다.
 
-`apt-get install --download-only` 는 명시한 패키지는 다시 받지만 **이미 설치된
-전이 의존성은 받지 않는다**(apt 가 이미 충족된 것으로 보기 때문). 그래서 설치가
-끝난 노드에서 번들을 다시 만들면 그 노드에 있는 만큼 빠진다.
+예전에는 `apt-get install --download-only --reinstall` 로 전이 의존성을 채웠다.
+이 방식은 **빌드 호스트에 이미 설치된 의존성을 받지 않는다**. 그래서 번들이
+빌드 호스트 상태에 따라 달라졌고, 실제로 두 번 구멍이 났다.
 
-실측으로 확인한 사례다. CP 로 쓰던 노드에서 다시 빌드했더니 이렇게 됐다.
+| 사례 | 누락 | 결과 |
+|---|---|---|
+| CP 로 쓰던 노드에서 빌드 | `docker-ce-rootless-extras` / `libnfsidmap1` / `pigz` / `rpcbind` | deb 23 → 19개 |
+| 깨끗한 컨테이너인데 빌드 도구 `skopeo` 를 먼저 설치 (2026-10-17, 26.04) | `libip4tc2` / `libip6tc2` / `libnetfilter-conntrack3` / `libnfnetlink0` / `libnftables1` / `libnftnl11` | deb 37 → 31개. ubuntu-server-minimal 노드에서 iptables · nftables · conntrack · kubelet · docker-ce 가 `dependency problems` 로 미구성 |
 
-```
-deb 23개 (깨끗한 호스트)  ->  19개 (CP 로 쓰던 호스트)
-누락: docker-ce-rootless-extras / libnfsidmap1 / pigz / rpcbind
-```
+두 번째는 `skopeo` → `containernetworking-plugins` → `iptables` / `nftables`
+의존 라이브러리가 빌드 컨테이너에 먼저 깔려서 생겼다. 예전 오염 검사는
+정해진 6개 패키지(kubelet 등)만 봤기 때문에 잡지 못했다.
 
-이 번들로 깨끗한 타깃에 설치하면 `dpkg` 의존성 오류가 난다. 번들 크기도
-381M → 371M 로 줄어 눈치채기 어렵다.
-
-`build-bundle.sh` 가 이 상태를 감지해 중단한다.
-
-```
-WARN 빌드 호스트에 이미 설치된 대상 패키지가 있다: kubelet kubeadm ... nfs-common
-WARN 이 상태로 빌드하면 **전이 의존성이 누락된 불완전한 번들**이 된다.
-FATAL 깨끗한 호스트에서 빌드할 것.
-```
-
-의존성 폐쇄집합을 계산해 채우는 방식은 쓰지 않았다. `libc6` 같은 기반 패키지까지
-끌어와 타깃에서 `dpkg -i` 로 기반 라이브러리를 교체할 위험이 있기 때문이다.
-감지해서 멈추는 편이 안전하다.
-
-정말 그 호스트에서 만들어야 하면 `--allow-dirty-host` 로 넘길 수 있지만,
-번들 완전성을 직접 확인해야 한다.
-
-#### 반대로 빌드 환경이 너무 최소여도 위험하다
-
-오염만 문제가 아니다. 빌드 환경이 실제 대상보다 **최소**면 서버에 기본 포함된
-것들까지 의존성으로 끌려와 번들에 들어간다.
+지금은 **빈 dpkg 상태**를 apt 에 주고 폐쇄집합을 계산한 뒤 기준선을 뺀다
+(`pkgs-debian.sh`).
 
 ```
-ubuntu:24.04 최소 컨테이너  : deb 101개 (systemd / libc6 / perl / python3 포함)
-+ ubuntu-server-minimal     : deb  33개
-깨끗한 Ubuntu Server        : deb  23개
+기준선 = ubuntu-server-minimal + Essential/required 패키지   (타깃에 이미 있다고 가정)
+번들   = 폐쇄집합(기준선 + 대상) - 폐쇄집합(기준선) + 명시 패키지
 ```
 
-타깃에서 `dpkg -i` 로 `systemd` 나 `libc6` 를 덮어쓰면 노드가 손상될 수 있다.
-그래서 `build-bundle.sh` 가 번들에 핵심 시스템 패키지가 있으면 중단한다.
+- 기준선과 대상을 **함께** 푼다. 그래야 `a | b` 같은 대안 의존성이 기준선 쪽 선택을
+  따른다.
+- `apt-get --print-uris` 로 목록만 뽑고 필요한 것만 `apt-get download` 한다.
+- 빌드 호스트 상태와 무관하므로 예전의 "깨끗한 호스트" 검사는 없앴다.
+  `--allow-dirty-host` 는 호환성을 위해 받기만 한다.
+
+실측(26.04): `skopeo` / `nfs-common` / `iptables` / `nftables` 를 미리 깐 컨테이너와
+깨끗한 컨테이너에서 만든 deb 집합이 **같았다(37개)**.
+
+| 대상 | 기준선 | 기준선+대상 | 번들 deb |
+|---|---|---|---|
+| 26.04 (resolute) | 427 | 461 | 37 |
+| 24.04 (noble) | 388 | 425 | 40 |
+| 22.04 (jammy) | 399 | 434 | 37 |
+
+#### 기준선보다 최소인 타깃은 지원하지 않는다
+
+빌드 환경이 실제 대상보다 **최소**면 서버에 기본 포함된 것들까지 번들에 들어가
+위험하다. 실측: ubuntu:24.04 최소 이미지에 기준선 없이 빌드하면 deb 101개가 되고
+`systemd` / `libc6` / `perl` / `python3` 가 포함됐다. 타깃에서 `dpkg -i` 로
+`systemd` 나 `libc6` 를 덮어쓰면 노드가 손상될 수 있다.
+
+기준선을 빼는 지금 방식에서는 이런 패키지가 들어가지 않는다. 그래도 안전망으로
+`build-bundle.sh` 가 핵심 시스템 패키지가 섞이면 중단한다.
 
 ```
 WARN 핵심 시스템 패키지: systemd_255.4-1ubuntu8.17_amd64.deb
 FATAL 번들에 핵심 시스템 패키지가 섞였다. 이 번들을 쓰면 타깃이 손상될 수 있다.
 ```
 
-컨테이너로 빌드할 때는 `00-common/build-in-container.sh` 를 쓰면 된다.
-`ubuntu-server-minimal` 을 먼저 설치해 기반 패키지 집합을 실제 서버와 맞춘다.
-23개보다 많은 33개가 나오는 것은 정상이며, 더 최소인 타깃에도 설치되는
-**안전한 상위집합**이다.
+타깃 노드는 기준선(`ubuntu-server-minimal`)의 패키지를 갖고 있어야 한다. Ubuntu
+Server 설치본은 보통 이를 포함하지만 이번에 실제 설치본으로 확인하지는 않았다.
+타깃에서 `dpkg -s ubuntu-server-minimal` 로 확인할 것.
+
+#### 빌드 직후 설치 검증 (build-in-container.sh)
+
+`00-common/build-in-container.sh` 로 10-k8s 를 빌드하면, 끝난 뒤 **같은 이미지로
+새 컨테이너**를 띄워 `ubuntu-server-minimal` 만 깔고 번들 deb 를 `dpkg -i` 한다.
+deb 가 전부 `installed` 이고 `dpkg --audit` 이 깨끗해야 통과한다. 빌드 컨테이너는
+빌드 도구가 깔려 있어 이 검증에 쓸 수 없다.
+
+```
+=== 10-k8s 번들 설치 검증 (docker.io/library/ubuntu:26.04 + ubuntu-server-minimal) ===
+  번들: k8s-1.36.4-resolute / deb 37개
+  기준선 패키지 419개
+  [OK] deb 전부 installed, dpkg --audit 깨끗함
+```
+
+`libnftnl11` 하나를 빼고 돌리면 `[FAIL] 미구성 5개: docker-ce iptables kubelet
+libnftables1 nftables` 와 빠진 의존성을 출력하고 실패한다(실측). 컨테이너에는
+systemd 가 없어 서비스 기동은 보지 않는다. `SKIP_INSTALL_TEST=1` 로 건너뛸 수 있다.
 
 ---
 
@@ -635,7 +655,7 @@ sudo ./install.sh --help         # 사용법
 
 1. 번들 무결성 검증, 에어갭 여부 확인
 2. 커널 모듈(`overlay`, `br_netfilter`), sysctl, swap 비활성(+fstab 주석)
-3. deb 23개 설치 → `kubelet/kubeadm/kubectl/containerd.io` **apt-mark hold**
+3. deb 설치(26.04 기준 37개) → `kubelet/kubeadm/kubectl/containerd.io` **apt-mark hold**
 4. containerd 설정 (아래 4.1)
 5. 이미지 7개를 **`k8s.io` 네임스페이스로** 적재 후 목록 대조
 6. helm / podman 설치

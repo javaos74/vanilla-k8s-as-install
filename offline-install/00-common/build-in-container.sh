@@ -22,9 +22,12 @@
 #   나머지 단계는 이미지·차트·바이너리만 다루므로 OS 와 무관하다.
 #
 # 컨테이너에 추가로 설치하는 것: curl / gnupg / ca-certificates / sudo
-#   build-bundle.sh 가 요구하는 도구다. 오염 가드가 보는 패키지
-#   (kubelet/kubeadm/kubectl/containerd.io/docker-ce/nfs-common)와 무관하므로
-#   번들 완전성에 영향이 없다. 실제로 deb 개수로 확인한다.
+#   build-bundle.sh 가 요구하는 도구다. 10-k8s 의 전이 의존성은 빈 dpkg 상태 +
+#   기준선(ubuntu-server-minimal) 대비로 계산하므로(10-k8s/pkgs-debian.sh)
+#   빌드 컨테이너에 무엇이 깔려 있든 번들 내용은 같다.
+#
+# 10-k8s 를 빌드하면 끝난 뒤 새 컨테이너에서 번들 설치 검증을 한다
+# (ubuntu-server-minimal + dpkg -i). SKIP_INSTALL_TEST=1 로 건너뛴다.
 #---------------------------------------------------------------------
 set -euo pipefail
 
@@ -128,4 +131,60 @@ podman run --rm \
     -v "${REPO}:/work:z" \
     -e STAGES="${STAGES[*]}" \
     "$IMAGE" \
-    bash -c "$RUNNER"
+    bash -c "$RUNNER" || exit $?
+
+#---------------------------------------------------------------------
+# 10-k8s 번들 설치 검증 (새 컨테이너)
+#
+# 번들의 deb 만으로 깨끗한 노드에 설치가 끝나는지 실제로 확인한다.
+# 빌드 컨테이너는 빌드 도구(skopeo 등)가 깔려 있어 설치 검증에 쓸 수 없으므로
+# 같은 이미지로 새 컨테이너를 띄워 ubuntu-server-minimal 만 깐 뒤 dpkg -i 한다.
+#
+# 이 검증이 생긴 이유(실측): skopeo 가 끌어온 iptables/nftables 라이브러리 6개가
+# 26.04 번들에서 빠졌는데 빌드는 성공했고, 설치 노드에서야 "dependency problems"
+# 로 드러났다. 번들의 결함은 빌드 단계에서 잡아야 한다.
+#
+# 컨테이너에는 systemd 가 없어 서비스 기동은 확인하지 않는다. 패키지가 전부
+# "installed" 로 구성되는지와 dpkg --audit 이 깨끗한지만 본다.
+# 건너뛰려면 SKIP_INSTALL_TEST=1.
+#---------------------------------------------------------------------
+if [[ " ${STAGES[*]} " == *" 10-k8s "* && "${SKIP_INSTALL_TEST:-0}" != "1" ]]; then
+    echo
+    echo "=== 10-k8s 번들 설치 검증 (${IMAGE} + ubuntu-server-minimal) ==="
+    read -r -d '' VERIFY <<'INNER' || true
+set -uo pipefail
+export DEBIAN_FRONTEND=noninteractive
+. /etc/os-release
+B="$(ls -dt /work/10-k8s/bundle/k8s-*-"${VERSION_CODENAME}" 2>/dev/null | head -1)"
+[[ -n "$B" && -d "$B/debs" ]] || { echo "  !! 번들을 찾지 못했다: k8s-*-${VERSION_CODENAME}"; exit 1; }
+echo "  번들: $(basename "$B") / deb $(ls "$B"/debs/*.deb | wc -l)개"
+
+apt-get update -qq
+apt-get install -y -qq ubuntu-server-minimal >/dev/null 2>&1 \
+    || { echo "  !! ubuntu-server-minimal 설치 실패"; exit 1; }
+echo "  기준선 패키지 $(dpkg -l | grep -c '^ii')개"
+
+# 저장소에서 아무것도 받지 않는다. dpkg -i 는 번들 파일만 쓴다.
+dpkg -i "$B"/debs/*.deb > /tmp/dpkg.log 2>&1
+DPKG_RC=$?
+
+BAD=()
+for d in "$B"/debs/*.deb; do
+    n="$(dpkg-deb -f "$d" Package)"
+    st="$(dpkg-query -W -f='${db:Status-Status}' "$n" 2>/dev/null || echo missing)"
+    [[ "$st" == "installed" ]] || BAD+=("${n}:${st}")
+done
+AUDIT="$(dpkg --audit 2>&1)"
+
+if (( DPKG_RC == 0 )) && ((${#BAD[@]} == 0)) && [[ -z "$AUDIT" ]]; then
+    echo "  [OK] deb 전부 installed, dpkg --audit 깨끗함"
+    exit 0
+fi
+echo "  [FAIL] dpkg rc=${DPKG_RC}, 미구성 ${#BAD[@]}개: ${BAD[*]}"
+grep -E "depends on|is not installed|error processing" /tmp/dpkg.log | sort -u | head -20 | sed 's/^/    /'
+[[ -n "$AUDIT" ]] && echo "$AUDIT" | head -10 | sed 's/^/    audit: /'
+echo "  이 번들을 쓰지 말 것. 빠진 의존성을 확인해 10-k8s/pkgs-debian.sh 를 고쳐야 한다."
+exit 1
+INNER
+    podman run --rm -v "${REPO}:/work:ro,z" "$IMAGE" bash -c "$VERIFY" || exit $?
+fi

@@ -107,63 +107,80 @@ pkgs_download() {
         || warn "일부 OS 패키지를 받지 못했다. 타깃에 이미 설치돼 있으면 문제되지 않는다."
 
     #-----------------------------------------------------------------
-    # 빌드 호스트는 **깨끗해야** 한다
+    # 전이 의존성 — 빌드 호스트 상태와 무관하게 계산한다
     #
-    # 아래 `apt-get install --download-only --reinstall` 은 명시한 패키지는 다시
-    # 받지만, **이미 설치된 전이 의존성은 받지 않는다**(apt 가 충족된 것으로 본다).
-    # 그래서 k8s/docker 가 이미 설치된 호스트에서 빌드하면 번들에 구멍이 생긴다.
+    # 예전에는 `apt-get install --download-only --reinstall` 로 채웠다. 이 방식은
+    # **빌드 호스트에 이미 설치된 의존성을 받지 않는다**(apt 가 충족된 것으로 본다).
+    # 그래서 번들 내용이 빌드 호스트 상태에 따라 달라졌다.
     #
-    # 실측: CP 로 쓰던 노드에서 다시 빌드했더니 deb 가 23개 -> 19개로 줄었다.
-    #   docker-ce-rootless-extras / libnfsidmap1 / pigz / rpcbind 누락
-    # 이 번들로 깨끗한 타깃에 설치하면 dpkg 의존성 오류가 난다.
+    # 실측 사고 두 건:
+    #   1) CP 로 쓰던 노드에서 빌드 -> deb 23 -> 19개
+    #      (docker-ce-rootless-extras / libnfsidmap1 / pigz / rpcbind 누락)
+    #   2) 깨끗한 컨테이너인데도 빌드 도구 skopeo 를 먼저 설치하면서
+    #      containernetworking-plugins -> iptables / nftables 의존 라이브러리가
+    #      함께 깔렸다. 26.04 번들에서 libip4tc2 / libip6tc2 /
+    #      libnetfilter-conntrack3 / libnfnetlink0 / libnftables1 / libnftnl11
+    #      6개가 빠졌고, ubuntu-server-minimal 노드에서 iptables / nftables /
+    #      conntrack / kubelet / docker-ce 가 "dependency problems" 로 미구성됐다.
+    #      예전의 오염 검사는 정해진 6개 패키지만 봤기 때문에 잡지 못했다.
     #
-    # 폐쇄집합을 직접 계산해 채우는 방법은 쓰지 않는다. libc6 같은 기반 패키지까지
-    # 끌어와 타깃에서 dpkg -i 로 기반 라이브러리를 바꿔버릴 위험이 있다.
-    # 대신 오염을 감지해 멈춘다. --allow-dirty-host 로 넘길 수 있지만 권장하지 않는다.
+    # 지금 방식: **빈 dpkg 상태**를 apt 에 주고 폐쇄집합을 계산한 뒤 기준선을 뺀다.
+    #   기준선 = 타깃 노드가 이미 갖고 있다고 가정하는 것
+    #          = ubuntu-server-minimal + Essential/required 패키지의 폐쇄집합
+    #   번들   = 폐쇄집합(기준선 + 대상 패키지) - 폐쇄집합(기준선) + 명시 패키지
+    # 기준선과 대상을 함께 풀어야 "a | b" 같은 대안 의존성이 기준선 쪽 선택을
+    # 따른다. 따로 풀면 기준선에 b 가 있는데 a 를 번들에 넣는 일이 생긴다.
+    #
+    # 빌드 호스트에 무엇이 깔려 있든 결과가 같으므로 예전의 "깨끗한 호스트"
+    # 검사(--allow-dirty-host)는 더 필요 없다. 인자는 호환성을 위해 받기만 한다.
     #-----------------------------------------------------------------
-    local -a DIRTY=()
-    local _p
-    for _p in kubelet kubeadm kubectl containerd.io docker-ce nfs-common; do
-        if pkg_installed "$_p"; then DIRTY+=("$_p"); fi
-    done
-    if ((${#DIRTY[@]} > 0)); then
-        warn "빌드 호스트에 이미 설치된 대상 패키지가 있다: ${DIRTY[*]}"
-        warn "이 상태로 빌드하면 **전이 의존성이 누락된 불완전한 번들**이 된다."
-        if ((ALLOW_DIRTY_HOST)); then
-            warn "--allow-dirty-host 가 지정돼 계속한다. 번들 완전성을 직접 확인할 것."
-        else
-            die "$(cat <<'MSG'
-깨끗한 호스트에서 빌드할 것. 설치 대상과 같은 OS 의 새 VM 이면 된다.
+    ((ALLOW_DIRTY_HOST)) && log "--allow-dirty-host 는 더 이상 필요 없다(의존성을 호스트 상태와 무관하게 계산한다)."
 
-이 검사가 있는 이유:
-  apt 는 이미 설치된 의존성을 다시 내려받지 않는다. 그래서 설치가 끝난
-  노드에서 번들을 만들면 그 노드에 이미 있는 패키지만큼 번들에 구멍이 생기고,
-  깨끗한 타깃에서 dpkg 의존성 오류로 드러난다.
+    local EMPTY_STATUS
+    EMPTY_STATUS="$(mktemp)"
+    # 빈 상태 파일로 "아무것도 설치되지 않은 시스템"을 가정해 받을 파일 목록만 뽑는다.
+    # --print-uris 는 다운로드하지 않는다. NoLocking 은 일반 사용자 실행을 위해서다.
+    _apt_closure() {
+        apt-get -qq -o Dir::State::status="$EMPTY_STATUS" -o Debug::NoLocking=1 \
+            install --print-uris -y "$@" 2>/dev/null \
+            | awk '/^'\''/ {print $2}' | sort -u
+    }
+    # Essential: yes 또는 Priority: required 인 패키지. 의존성으로 선언되지 않아도
+    # 모든 Ubuntu 에 깔려 있다(bash, coreutils, sed 등).
+    local -a BASE_PKGS=(ubuntu-server-minimal)
+    mapfile -t -O 1 BASE_PKGS < <(apt-cache dumpavail 2>/dev/null | awk '
+        /^Package: /  { p = $2 }
+        /^Essential: yes/ || /^Priority: required/ { req[p] = 1 }
+        /^$/          { p = "" }
+        END           { for (k in req) print k }' | sort -u)
 
-정말 이 호스트에서 만들어야 한다면:
-  ./build-bundle.sh --allow-dirty-host
-MSG
-)"
-        fi
+    log "의존성 폐쇄집합 계산 (기준선: ubuntu-server-minimal + Essential/required ${#BASE_PKGS[@]}개)"
+    local base_list joint_list
+    base_list="$(_apt_closure "${BASE_PKGS[@]}")"
+    joint_list="$(_apt_closure "${BASE_PKGS[@]}" "${PINNED_DEBS[@]}" "${OS_DEPS[@]}")"
+    rm -f "$EMPTY_STATUS"
+    [[ -n "$base_list" && -n "$joint_list" ]] \
+        || die "apt 로 의존성 폐쇄집합을 계산하지 못했다. apt-get update 상태와 저장소를 확인할 것."
+
+    # 파일명(이름_버전_아키텍처.deb, epoch 의 ':' 는 %3a)에서 이름=버전 을 만든다.
+    local -a EXTRA_SPECS=()
+    local f n rest v
+    while read -r f; do
+        [[ -n "$f" ]] || continue
+        n="${f%%_*}"; rest="${f#*_}"; v="${rest%_*}"; v="${v//%3a/:}"
+        EXTRA_SPECS+=("${n}=${v}")
+    done < <(comm -13 <(echo "$base_list") <(echo "$joint_list"))
+    log "기준선 $(wc -l <<<"$base_list")개 / 기준선+대상 $(wc -l <<<"$joint_list")개 -> 추가 ${#EXTRA_SPECS[@]}개"
+
+    if ((${#EXTRA_SPECS[@]} > 0)); then
+        download_debs "전이 의존성" "${EXTRA_SPECS[@]}" \
+            || die "전이 의존성을 받지 못했다. 빠진 채로 두면 타깃에서 dpkg 의존성 오류가 난다."
     fi
 
-    # 위에서 받지 못한 추가 의존성을 apt 가 계산해 채운다.
-    # (예: docker-ce 가 요구하는 libslirp / pigz 등 OS 버전마다 다르다)
-    log "잔여 의존성 계산 및 다운로드"
-    mkdir -p "${DEB_DIR}/partial"
-    sudo apt-get install -y --download-only --reinstall \
-         -o Dir::Cache::archives="${DEB_DIR}" \
-         "${PINNED_DEBS[@]}" "${OS_DEPS[@]}" >/dev/null 2>&1 || \
-      warn "일부 의존성 다운로드를 건너뜀(이미 최신이거나 충돌). 설치 단계에서 확인된다."
-    sudo chown -R "$(id -u):$(id -g)" "$DEB_DIR" 2>/dev/null || true
-    rm -rf "${DEB_DIR}/partial" "${DEB_DIR}/lock"
-
     PKG_COUNT="$(find "$DEB_DIR" -name '*.deb' | wc -l)"
-    # 깨끗한 24.04 서버에서 23개, 컨테이너(ubuntu-server-minimal 기반)에서 33개였다.
-    # 크게 적으면 빌드 호스트 오염을 의심할 것.
+    # 기준선 대비 계산이므로 호스트에 따라 줄지 않는다. 크게 적으면 저장소 문제다.
     if (( PKG_COUNT < 20 )); then
-        warn "deb 가 ${PKG_COUNT}개뿐이다. 깨끗한 호스트에서는 23개 이상이었다."
-        warn "빌드 호스트 오염으로 전이 의존성이 누락됐을 수 있다."
+        warn "deb 가 ${PKG_COUNT}개뿐이다. 저장소 상태(apt-get update)를 확인할 것."
     fi
 
     #-----------------------------------------------------------------

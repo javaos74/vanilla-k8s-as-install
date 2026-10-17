@@ -35,6 +35,8 @@ image_ok() {
     fi
     # skopeo 없을 때: 익명 토큰 -> manifest HEAD
     local repo="${ref%:*}" tag="${ref##*:}" registry path token
+    # 다이제스트 참조(repo@sha256:...)는 ':' 로 자르면 깨진다.
+    if [[ "$ref" == *@* ]]; then repo="${ref%@*}"; tag="${ref#*@}"; fi
     registry="${repo%%/*}"; path="${repo#*/}"
     case "$registry" in
         quay.io)
@@ -123,6 +125,13 @@ if http_ok "https://dl.min.io/server/minio/release/linux-${BUNDLE_ARCH}/minio"; 
 else
     log "dl.min.io 는 여전히 410 Gone (예상된 상태)"
 fi
+
+step "SeaweedFS (MinIO 대안 검토, Apache-2.0)"
+# 태그가 아니라 번들이 실제로 받는 다이제스트 참조를 확인한다.
+check "seaweedfs 이미지 (${SEAWEEDFS_IMAGE##*:})" \
+    image_ok "${SEAWEEDFS_IMAGE%:*}@${SEAWEEDFS_IMAGE_DIGEST}"
+check "aws-cli 이미지 (${SEAWEEDFS_CLIENT_IMAGE##*:})" \
+    image_ok "${SEAWEEDFS_CLIENT_IMAGE%:*}@${SEAWEEDFS_CLIENT_IMAGE_DIGEST}"
 
 step "HAProxy"
 check "haproxy 이미지 ${HAPROXY_IMAGE}" image_ok "$HAPROXY_IMAGE"

@@ -5,6 +5,7 @@
 #   ./build-in-container.sh 24.04 10-k8s
 #   ./build-in-container.sh 22.04 10-k8s
 #   ./build-in-container.sh 24.04 20-minio 30-harbor 40-haproxy
+#   ./build-in-container.sh 26.04 21-seaweedfs
 #   ./build-in-container.sh 24.04 45-redis
 #   ./build-in-container.sh 24.04 all
 #
@@ -35,7 +36,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="docker.io/library/ubuntu:${OSVER}"
 
 # OS 에 의존하는 단계는 10-k8s 뿐이다. 나머지는 어느 이미지에서 만들어도 같다.
-ALL_STAGES=(10-k8s 20-minio 30-harbor 40-haproxy 45-redis 50-nfs-csi 60-cilium 70-mssql 80-postgresql)
+ALL_STAGES=(10-k8s 20-minio 21-seaweedfs 30-harbor 40-haproxy 45-redis 50-nfs-csi 60-cilium 70-mssql 80-postgresql)
 if [[ "$1" == "all" ]]; then
     STAGES=("${ALL_STAGES[@]}")
 else

@@ -20,6 +20,7 @@
 #   out/as/tls.crt tls.key fullchain.crt UiPath Automation Suite ingress
 #   out/harbor/harbor.crt harbor.key     Harbor (harbor.yml 이 참조)
 #   out/minio/public.crt private.key     MinIO (이 파일명을 요구한다)
+#   out/weed/weed.crt weed.key           SeaweedFS S3 (-s3.cert.file/-s3.key.file)
 #   out/mssql/mssql.pem mssql.key        SQL Server (mssql.conf 가 참조)
 #   out/pgsql/server.crt server.key      PostgreSQL (ssl_cert_file 이 참조)
 #   out/redis/server.crt server.key      Redis OSS (TLS listener)
@@ -77,12 +78,14 @@ CERT_COUNTRY="${CERT_COUNTRY:-KR}"
 # 와일드카드가 필요한 곳:
 #   as    : UiPath AS 는 alm.<fqdn>, monitoring.<fqdn> 등 하위 이름을 쓴다.
 #   minio : 가상 호스트 스타일 버킷 주소(<bucket>.<host>)를 쓰려면 필요하다.
+#   weed  : MinIO 와 같은 이유. SeaweedFS 는 -s3.domainName 으로 같은 방식을 쓴다.
 # 나머지는 단일 이름이므로 와일드카드를 넣지 않는다(공격면을 줄인다).
 #---------------------------------------------------------------------
 TARGETS=(
     "as|${AS_FQDN:-}|${AS_LB_IP:-}|yes|tls.crt|tls.key"
     "harbor|${HARBOR_HOSTNAME:-}|${HARBOR_PRIVATE_IP:-}|no|harbor.crt|harbor.key"
     "minio|${MINIO_HOSTNAME:-}|${MINIO_HOST_IP:-}|yes|public.crt|private.key"
+    "weed|${WEED_HOSTNAME:-}|${WEED_HOST_IP:-}|yes|weed.crt|weed.key"
     "mssql|${MSSQL_HOSTNAME:-}|${MSSQL_HOST_IP:-}|no|mssql.pem|mssql.key"
     "pgsql|${PG_HOSTNAME:-}|${PG_HOST_IP:-}|no|server.crt|server.key"
     "redis|${REDIS_HOSTNAME:-}|${REDIS_HOST_IP:-}|no|server.crt|server.key"
@@ -300,7 +303,7 @@ done
 
 ((${#SKIPPED[@]} == 0)) || {
     warn "호스트명이 비어 건너뛴 서비스: ${SKIPPED[*]}"
-    warn "  site.env 에 AS_FQDN / HARBOR_HOSTNAME / MINIO_HOSTNAME /"
+    warn "  site.env 에 AS_FQDN / HARBOR_HOSTNAME / MINIO_HOSTNAME / WEED_HOSTNAME /"
     warn "  MSSQL_HOSTNAME / PG_HOSTNAME / REDIS_HOSTNAME 을 채우면 발급된다."
 }
 

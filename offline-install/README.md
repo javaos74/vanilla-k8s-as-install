@@ -61,7 +61,8 @@ flowchart TD
 | **Metrics Server** | **v0.9.0** | K8s 애드온 Manifest | `--kubelet-insecure-tls` 적용 |
 | **인증서 (PKI)** | Internal CA | `05-certs/make-certs.sh` | OpenSSL 기반 사내 통합 CA 및 서비스별 SAN 인증서 |
 | **Storage (CSI)** | csi-driver-nfs **v4.13.4** | K8s CSI Driver + NFS Kernel Server | 기본 StorageClass: `nfs-csi` (동적 프로비저닝) |
-| **Object Storage** | MinIO `RELEASE.2025-09-07` | Docker Compose (SNSD 단일 노드) | S3 호환, TLS 적용 |
+| **Object Storage** | MinIO `RELEASE.2025-09-07` | Docker Compose (SNSD 단일 노드) | S3 호환, TLS 적용. AGPL-3.0, quay.io 이미지 401(2026-10-17) |
+| **Object Storage (대안 검토)** | SeaweedFS **4.48** | Docker Compose (`weed server` 단일 노드) | Apache-2.0, S3 TLS 전용. 번들 빌드까지 검증, `install.sh` 미작성 |
 | **Registry** | Harbor **v2.15.2** | 공식 오프라인 인스톨러 + systemd | HTTPS(443) 전용, 자동 복구 스크립트 |
 | **L4 Load Balancer** | HAProxy **3.1** | Docker (`--network host`) | 80/443/15021 TCP 패스스루 |
 | **Database** | SQL Server 2022 (CU25/CU26) / PostgreSQL 16 | Docker 커스텀 이미지 / Docker Compose | MSSQL은 **Full-Text Search(FTS)** 내장 필수, PG는 TLS 적용 |
@@ -90,6 +91,7 @@ vi site.env
 - `NFS_MOUNT_PATH` / `NFS_EXPORT_PATH`: NFS 서버 마운트 및 export 디렉터리 (예: `/data/nfs`)
 - `HARBOR_HOSTNAME` / `HARBOR_PRIVATE_IP`: 사내 Harbor FQDN 및 IP (예: `harbor.myrobots.co.kr` / `10.32.99.4`)
 - `MINIO_HOSTNAME`: MinIO FQDN (예: `minio.myrobots.co.kr`)
+- `WEED_HOSTNAME` / `WEED_HOST_IP` / `WEED_ROOT_USER` / `WEED_ROOT_PASSWORD`: SeaweedFS(MinIO 대안) S3 접속 FQDN·IP 및 자격증명. `05-certs` 가 `*.<WEED_HOSTNAME>` 와일드카드 인증서를 발급
 - `AS_FQDN`: Automation Suite 서비스 FQDN (예: `as2510.myrobots.co.kr`, 하위 와일드카드 인증서 발급 대상)
 - `MSSQL_DATA_DIR` / `MSSQL_SA_PASSWORD` / `MSSQL_PID`: 외부 MSSQL 데이터 경로, SA 암호 및 에디션
 - `PG_DATA_DIR` / `PG_HOSTNAME` / `PG_PASSWORD`: 외부 PostgreSQL 데이터 경로(기본: `/data/postgresql`), 접속 FQDN 및 암호
@@ -110,6 +112,8 @@ cd offline-install
 
 # 특정 컴포넌트만 빌드할 경우 예시:
 # ./00-common/build-in-container.sh 24.04 10-k8s 60-cilium 50-nfs-csi 30-harbor 20-minio
+# MinIO 대안(SeaweedFS) 번들만:
+# ./00-common/build-in-container.sh 26.04 21-seaweedfs
 ```
 
 > [!IMPORTANT]
@@ -126,6 +130,7 @@ sha256sum -c cilium-1.20.2.tar.gz.sha256
 sha256sum -c nfs-csi-v4.13.4.tar.gz.sha256
 sha256sum -c harbor-v2.15.2.tar.gz.sha256
 sha256sum -c minio-RELEASE.*.tar.gz.sha256
+sha256sum -c seaweedfs-4.48.tar.gz.sha256      # SeaweedFS 를 쓰는 경우
 ```
 
 ---
@@ -255,7 +260,7 @@ cd offline-install/05-certs
 
 # 2) 발급된 인증서 확인
 # out/as/ (AS 와일드카드 TLS)
-# out/harbor/, out/minio/, out/mssql/, out/redis/, out/pgsql/
+# out/harbor/, out/minio/, out/weed/, out/mssql/, out/redis/, out/pgsql/
 
 # 3) 클러스터 노드 및 인프라 서버에 CA 신뢰 배포
 sudo ./deploy-certs.sh --target local
@@ -316,6 +321,12 @@ sudo ./install.sh --check-only
 - **엔드포인트:** `https://<MINIO_HOSTNAME>:9000` (콘솔: 9001)
 - **자격증명 확인:** `/opt/minio/minio.env`
 - **Automation Suite용 버킷 생성:** MinIO Client(`mc`) 또는 웹 콘솔에서 AS 설치에 사용할 버킷(예: `charles-as-bucket` 또는 `uipath`)을 사전 생성합니다.
+
+> [!NOTE]
+> **MinIO 대안 — SeaweedFS ([`21-seaweedfs`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/21-seaweedfs/README.md))**  
+> MinIO 는 AGPL-3.0 이고, 2026-10-17 기준 quay.io 이미지가 401 을 반환해 번들을 새로 만들 수 없습니다. Apache-2.0 인 SeaweedFS 4.48 을 대안으로 검토 중입니다.
+> 현재는 번들 빌드(`build-in-container.sh 26.04 21-seaweedfs`)와 `05-certs` 의 `weed` 인증서로 띄운 S3 TLS 왕복 스모크 테스트(27/27)까지 검증했고, `install.sh` 는 아직 없습니다.
+> 엔드포인트는 `https://<WEED_HOSTNAME>:8333` 입니다.
 
 ---
 

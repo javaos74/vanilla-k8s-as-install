@@ -29,6 +29,11 @@ deb/tarball 설치를 제공하지 않고 **컨테이너로만** 구성한다.
 AGPL 라이선스와 운영 정책을 검토해 대안(예: 상용 AIStor, Ceph RGW, SeaweedFS)을
 선택해야 한다. 이 번들은 "기존 환경과 같은 버전으로 재현한다"를 목표로 한다.
 
+> 2026-10-17 `verify-urls.sh` 에서 위 두 이미지가 태그·다이제스트 모두
+> `unauthorized`(quay.io 401)로 바뀐 것을 확인했다. 이미 만든 번들은 쓸 수 있지만
+> 새로 빌드할 수 없다. 대안으로 [`21-seaweedfs`](../21-seaweedfs/README.md)
+> (Apache-2.0)를 검토 중이다.
+
 빌드 시점의 다이제스트를 `conf/images.digests` 에 기록한다. 태그가 사라져도
 우리가 무엇을 받았는지 증명할 수 있어야 하기 때문이다.
 

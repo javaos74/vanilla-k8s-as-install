@@ -1,9 +1,10 @@
 # 05-certs — 사내 CA 와 서비스 인증서
 
-CA 하나로 UiPath Automation Suite · Harbor · MinIO · Redis OSS · SQL Server · PostgreSQL 의
+CA 하나로 UiPath Automation Suite · Harbor · MinIO · SeaweedFS · Redis OSS · SQL Server · PostgreSQL 의
 서버 인증서를 발급하고, 모든 노드에 CA 를 신뢰시킨다.
 
-에어갭 노드 3대에서 발급·배포·바인딩을 검증했다(8절).
+에어갭 노드 3대에서 발급·배포·바인딩을 검증했고, 이후 추가한 SeaweedFS(`weed`)
+대상은 Ubuntu 26.04 에서 발급과 실제 TLS 바인딩까지 확인했다(8절).
 
 ---
 
@@ -20,8 +21,8 @@ CA 를 하나 두면 클라이언트는 **CA 1개만** 신뢰하면 되고, 서�
         ┌──────────────────────────┐
         │  Vanilla K8s Internal CA │  ← 노드에는 ca.crt 만 배포
         └────────────┬─────────────┘
-     ┌──────┬────────┼────────┬────────┐
-    as   harbor    minio    redis    mssql    pgsql      ← 서버 인증서 (키는 각 호스트)
+     ┌──────┬────────┼────────┬────────┬────────┐
+    as   harbor    minio    weed     redis    mssql    pgsql      ← 서버 인증서 (키는 각 호스트)
 ```
 
 **`ca.key` 는 발급 호스트에만 둔다.** 노드에 두면 그 노드가 침해될 때 PKI 전체가
@@ -40,6 +41,7 @@ CA 를 하나 두면 클라이언트는 **CA 1개만** 신뢰하면 되고, 서�
     ├── as/tls.crt tls.key fullchain.crt ca.crt
     ├── harbor/harbor.crt harbor.key ca.crt
     ├── minio/public.crt private.key ca.crt
+    ├── weed/weed.crt weed.key ca.crt
     ├── mssql/mssql.pem mssql.key ca.crt
     ├── pgsql/server.crt server.key ca.crt
     └── redis/server.crt server.key ca.crt
@@ -53,6 +55,7 @@ CA 를 하나 두면 클라이언트는 **CA 1개만** 신뢰하면 되고, 서�
 | 서비스 | 파일명 | 이유 |
 |---|---|---|
 | MinIO | `public.crt` / `private.key` | MinIO 가 이 이름을 찾는다. 바꿀 수 없다 |
+| SeaweedFS | `weed.crt` / `weed.key` | 이름 제약은 없다. `-s3.cert.file` / `-s3.key.file` 로 지정 |
 | Harbor | `harbor.crt` / `harbor.key` | `harbor.yml` 이 참조 |
 | SQL Server | `mssql.pem` / `mssql.key` | `mssql.conf` 가 참조 |
 | PostgreSQL | `server.crt` / `server.key` | `ssl_cert_file` 이 참조 |
@@ -70,7 +73,7 @@ CA 를 하나 두면 클라이언트는 **CA 1개만** 신뢰하면 되고, 서�
 # 1) 호스트명을 먼저 채운다
 cd offline-install/00-common
 cp site.env.example site.env
-vi site.env     # AS_FQDN, HARBOR_HOSTNAME, MINIO_HOSTNAME, MSSQL_HOSTNAME, PG_HOSTNAME, REDIS_HOSTNAME
+vi site.env     # AS_FQDN, HARBOR_HOSTNAME, MINIO_HOSTNAME, WEED_HOSTNAME, MSSQL_HOSTNAME, PG_HOSTNAME, REDIS_HOSTNAME
 
 # 2) 발급
 cd ../05-certs && ./make-certs.sh
@@ -93,12 +96,13 @@ cd ../05-certs && ./make-certs.sh
 DNS:<호스트명>, DNS:localhost, IP:<노드IP>, IP:127.0.0.1
 ```
 
-**와일드카드는 두 서비스에만** 넣는다. 공격면을 줄이기 위해 필요한 곳만 준다.
+**와일드카드는 세 서비스에만** 넣는다. 공격면을 줄이기 위해 필요한 곳만 준다.
 
 | 서비스 | 와일드카드 | 이유 |
 |---|---|---|
 | `as` | `*.<AS_FQDN>` | AS 는 `alm.<fqdn>`, `monitoring.<fqdn>` 등 하위 이름을 쓴다 |
 | `minio` | `*.<MINIO_HOSTNAME>` | 가상 호스트 스타일 버킷 주소(`<bucket>.<host>`) |
+| `weed` | `*.<WEED_HOSTNAME>` | 같은 이유. SeaweedFS 는 `-s3.domainName` 으로 받는다 |
 
 ### 유효기간과 키 길이
 
@@ -203,6 +207,7 @@ TLS 검증을 통째로 끄는 설정이다. CA 를 신뢰시키면 검증을 �
 | 서비스 | 바인딩 방식 |
 |---|---|
 | `20-minio` | `/certs/{public.crt,private.key}` + `/certs/CAs/ca.crt` |
+| `21-seaweedfs` | `-s3.cert.file=/certs/weed.crt` / `-s3.key.file=/certs/weed.key`. **uid 1000 소유**로 복사해야 한다(아래) |
 | `30-harbor` | `harbor.yml` 의 `certificate`/`private_key`. docker 신뢰에는 **CA** 를 넣는다 |
 | `70-mssql` | `mssql.conf` 의 `network.tlscert`/`tlskey` (아래) |
 | `80-postgresql` | `ssl_cert_file`/`ssl_key_file` |
@@ -210,6 +215,14 @@ TLS 검증을 통째로 끄는 설정이다. CA 를 신뢰시키면 검증을 �
 
 Harbor 의 docker 신뢰에 서버 인증서가 아니라 CA 를 넣는 것이 중요하다.
 서버 인증서를 넣으면 갱신할 때마다 모든 노드를 고쳐야 한다.
+
+### SeaweedFS 는 키 소유권을 맞춰야 한다
+
+SeaweedFS 이미지는 root 로 시작해 `/data` 만 chown 한 뒤 `seaweed`(uid 1000)로
+내려가 실행된다. `/opt/pki/weed/weed.key` 는 root 소유 0600 이므로 그대로
+마운트하면 읽지 못한다. `/opt/weed/certs/` 로 복사하고 `1000:1000` 소유,
+키 0600 으로 둔다(실측: root 소유면 `permission denied` 로 즉시 종료).
+자세한 것은 `21-seaweedfs/README.md` 4절.
 
 ### SQL Server 는 TLS 설정이 따로 필요하다
 
@@ -298,6 +311,22 @@ CA 자체를 바꿔야 한다면(`--rotate-ca`) 기존 인증서가 모두 무�
 | `70-mssql` TLS(errorlog 로드 확인 + 암호화 연결) | **24/24** |
 | `80-postgresql` TLS(`pg_stat_ssl` 세션 암호화) | **25/25** |
 
+### SeaweedFS(`weed`) 추가 검증
+
+2026-10-17 에 Ubuntu 26.04.1 LTS(OpenSSL 3.5.5) 호스트에서 수행했다.
+`site.env.example` 값 + `WEED_HOST_IP` 만 채워 발급했다.
+
+| 항목 | 결과 |
+|---|---|
+| 발급 (CA + 서비스 7개, weed 포함) | **판정 49/49** (`[weed]` 7항목: 존재·권한·체인·키 짝·SAN·와일드카드 SAN·만료) |
+| `weed` SAN | `DNS:weed.example.internal, DNS:*.weed.example.internal, DNS:localhost, IP:192.168.0.28, IP:127.0.0.1` |
+| SeaweedFS S3 에 바인딩 후 `openssl s_client -CAfile ca.crt` | **Verify return code: 0** (이름·IP 양쪽) |
+| aws-cli 를 CA 검증 켠 채로 S3 왕복 + 가상 호스트 스타일 | **통과** (`21-seaweedfs` 7절, 27/27) |
+
+`deploy-certs.sh` 는 서비스 목록에 `weed` 를 추가한 것뿐이라(`/opt/pki/weed/` 배치)
+빌드 호스트의 OS 신뢰 저장소·containerd 설정을 바꾸지 않으려고 이번에는 실행하지
+않았다. 문법 검사(`bash -n`)만 했다.
+
 MSSQL 의 실제 확인 내용이다.
 
 ```
@@ -333,6 +362,7 @@ errorlog: The certificate [Certificate File:'/var/opt/mssql/certs/mssql.pem',
 | `update-ca-certificates` 했는데 신뢰되지 않음 | 확장자가 `.crt` 가 아니다 | `.pem` 은 조용히 무시된다 |
 | SQL Server 가 인증서를 무시 | 소유권/권한 | 5절. `10001:10001`, 파일 0600, 디렉터리 0700. errorlog 확인 |
 | PostgreSQL 기동 실패 `private key file has group or world access` | 키 권한 | uid 999 소유 + 0600 |
+| SeaweedFS 기동 직후 종료 `permission denied` | 키·`s3.json` 이 root 소유 | uid 1000 소유 + 0600 (5절) |
 | 이름으로는 되고 IP 로는 TLS 실패 | SAN 에 IP 가 없다 | `site.env` 의 `*_HOST_IP` 를 채우고 재발급 |
 | 서비스 기동 후 조용히 TLS 실패 | 인증서와 키가 짝이 아니다 | `make-certs.sh --check-only` 의 짝 검사 |
 | `--rotate-ca` 후 전부 실패 | 모든 인증서가 무효 | 7절. 전체 재배포 필요 |
@@ -345,7 +375,7 @@ errorlog: The certificate [Certificate File:'/var/opt/mssql/certs/mssql.pem',
 `/etc/containerd/config.toml` 을 요구하기 때문이다. 발급 자체는 언제든 가능하다.
 
 ```
-10-k8s → [05-certs] → 60-cilium → 50-nfs-csi → 40-haproxy → 30-harbor → 20-minio
+10-k8s → [05-certs] → 60-cilium → 50-nfs-csi → 40-haproxy → 30-harbor → 20-minio (또는 21-seaweedfs)
                               45-redis · 70-mssql · 80-postgresql
 ```
 

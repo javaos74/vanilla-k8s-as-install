@@ -81,7 +81,7 @@ run_checks() {
     fi
 
     local svc
-    for svc in as harbor minio mssql pgsql redis; do
+    for svc in as harbor minio weed mssql pgsql redis; do
         [[ -d "${OUT}/${svc}" ]] || continue
         check "[${svc}] /opt/pki 에 배치됨" bash -c "
             ls '${PKI_DIR}/${svc}'/*.crt >/dev/null 2>&1 || ls '${PKI_DIR}/${svc}'/*.pem >/dev/null 2>&1"
@@ -182,7 +182,7 @@ PY
     #--- 4) 서비스 인증서 배치 -----------------------------------------
     step "서비스 인증서 배치 (${PKI_DIR})"
     local svc f base
-    for svc in as harbor minio mssql pgsql redis; do
+    for svc in as harbor minio weed mssql pgsql redis; do
         [[ -d "${OUT}/${svc}" ]] || continue
         install -d -m 0755 "${PKI_DIR}/${svc}"
         for f in "${OUT}/${svc}"/*; do
@@ -274,7 +274,7 @@ if [[ "$MODE" == "local" ]]; then
     step "다음 단계"
     echo "  서비스 설치 스크립트가 ${PKI_DIR} 아래 인증서를 자동으로 쓴다."
     echo "  이미 설치된 서비스는 해당 install.sh 를 다시 실행하면 교체된다."
-    echo "    20-minio / 30-harbor / 45-redis / 70-mssql / 80-postgresql"
+    echo "    20-minio / 21-seaweedfs / 30-harbor / 45-redis / 70-mssql / 80-postgresql"
     exit $rc
 else
     apply_remote

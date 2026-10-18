@@ -966,7 +966,7 @@ sudo ./install.sh
 ## 8. 다음 단계
 
 ```
-10-k8s  →  60-cilium  →  Metrics Server  →  50-nfs-csi  →  40-haproxy  →  30-harbor  →  20-minio
+10-k8s  →  60-cilium  →  50-nfs-csi  →  40-haproxy  →  30-harbor  →  35-metrics-server  →  20-minio
 ```
 
 CNI 가 없으면 아무 워크로드도 스케줄되지 않으므로 **60-cilium 을 먼저** 적용한다.
@@ -986,12 +986,13 @@ Prometheus/Grafana 대체재가 아니며 기본 리소스 메트릭 API 만 제
 저장소에만 적재해서는 안 된다.
 
 ```bash
-# 승인된 Metrics Server 릴리스의 components.yaml 을 적용
-kubectl apply -f components.yaml
-kubectl -n kube-system rollout status deployment/metrics-server --timeout=180s
-kubectl get apiservice v1beta1.metrics.k8s.io
-kubectl top nodes
+# 에어갭: 30-harbor 설치 뒤 35-metrics-server 번들로 배포한다(이미지를 로컬 Harbor 에 push).
+sudo HARBOR_PASSWORD='<Harbor admin 비밀번호>' ./install.sh     # 35-metrics-server 번들 안에서
+sudo ./install.sh --check-only
+# 온라인 클러스터라면 저장소 루트 metrics-server/components.yaml 을 그대로 적용해도 된다.
 ```
+
+자세한 내용은 [`35-metrics-server/README.md`](../35-metrics-server/README.md).
 
 APIService 가 `Available=True` 여야 하며, 잠시 기다린 뒤 `kubectl top nodes` 에서
 control plane 과 worker 모두 메트릭이 보여야 한다. Metrics Server 에서 각 노드 kubelet 의

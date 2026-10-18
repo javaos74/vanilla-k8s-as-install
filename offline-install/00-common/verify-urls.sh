@@ -133,6 +133,10 @@ check "seaweedfs 이미지 (${SEAWEEDFS_IMAGE##*:})" \
 check "aws-cli 이미지 (${SEAWEEDFS_CLIENT_IMAGE##*:})" \
     image_ok "${SEAWEEDFS_CLIENT_IMAGE%:*}@${SEAWEEDFS_CLIENT_IMAGE_DIGEST}"
 
+step "Metrics Server (registry.uipath.com 미러, 다이제스트 참조)"
+check "metrics-server 이미지 (${METRICS_SERVER_SOURCE_IMAGE##*:})" \
+    image_ok "${METRICS_SERVER_SOURCE_IMAGE%:*}@${METRICS_SERVER_SOURCE_DIGEST}"
+
 step "HAProxy"
 check "haproxy 이미지 ${HAPROXY_IMAGE}" image_ok "$HAPROXY_IMAGE"
 

@@ -39,7 +39,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="docker.io/library/ubuntu:${OSVER}"
 
 # OS 에 의존하는 단계는 10-k8s 뿐이다. 나머지는 어느 이미지에서 만들어도 같다.
-ALL_STAGES=(10-k8s 20-minio 21-seaweedfs 30-harbor 40-haproxy 45-redis 50-nfs-csi 60-cilium 70-mssql 80-postgresql)
+ALL_STAGES=(10-k8s 20-minio 21-seaweedfs 30-harbor 35-metrics-server 40-haproxy 45-redis 50-nfs-csi 60-cilium 70-mssql 80-postgresql)
 if [[ "$1" == "all" ]]; then
     STAGES=("${ALL_STAGES[@]}")
 else

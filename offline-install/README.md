@@ -23,14 +23,14 @@ flowchart TD
         K1["10-k8s Control-Plane 설치\n(kubeadm init, NotReady)"] --> K2["60-cilium CNI 배포\n(Helm, CP Ready 전환)"]
         K2 --> K3["10-k8s Worker 노드 설치 및 조인\n(kubeadm join)"]
         K3 --> K4["60-cilium Worker 이미지 적재\n(Worker Ready 전환)"]
-        K4 --> K5["Metrics Server 배포\n(kubectl top 검증)"]
     end
 
     subgraph Phase2["Phase 2: 필수 인프라 서비스 구성"]
         I1["05-certs 사내 통합 CA 및\n서비스 인증서 발급/배포"] --> I2["50-nfs-csi 스토리지 구축\n(NFS 서버 + CSI Driver)"]
         I2 --> I3["20-minio S3 호환\n오브젝트 스토리지 설치"]
         I3 --> I4["30-harbor 사내 오프라인\n컨테이너 레지스트리 설치"]
-        I4 --> I5["보조 인프라 배치\n(40-haproxy L4, 70-mssql FTS, 45-redis)"]
+        I4 --> I4b["35-metrics-server\n(Harbor 경유 배포, kubectl top 검증)"]
+        I4b --> I5["보조 인프라 배치\n(40-haproxy L4, 70-mssql FTS, 45-redis)"]
     end
 
     subgraph Phase3["Phase 3: UiPath Automation Suite 설치"]
@@ -58,7 +58,7 @@ flowchart TD
 | **OS** | Ubuntu 22.04 / 24.04 / 26.04 LTS, RHEL 9 (9.6) / 10 (10.2) | Linux Host (amd64) | 10-k8s 패키지 번들은 OS 별(코드네임 / el9 / el10), RHEL 은 빌드 호스트와 타깃의 부 버전이 같아야 함. RHEL 은 SELinux enforcing · firewalld 활성 상태로 검증 |
 | **Kubernetes** | **v1.36.4** | deb / kubeadm, containerd v2.3.5 | CRI: containerd (`SystemdCgroup = true`) |
 | **CNI (Cilium)** | **v1.20.2** | Helm 차트 + 컨테이너 이미지 | VXLAN tunnel (UDP 8472), kube-proxy 유지 |
-| **Metrics Server** | **v0.9.0** | K8s 애드온 Manifest | `--kubelet-insecure-tls` 적용 |
+| **Metrics Server** | **v0.9.0** | K8s 애드온 Manifest (`35-metrics-server`, 로컬 Harbor 경유) | `--kubelet-insecure-tls` 적용. 이미지 원본 `registry.uipath.com/rancher/hardened-k8s-metrics-server` |
 | **인증서 (PKI)** | Internal CA | `05-certs/make-certs.sh` | OpenSSL 기반 사내 통합 CA 및 서비스별 SAN 인증서 |
 | **Storage (CSI)** | csi-driver-nfs **v4.13.4** | K8s CSI Driver + NFS Kernel Server | 기본 StorageClass: `nfs-csi` (동적 프로비저닝) |
 | **Object Storage** | MinIO `RELEASE.2025-09-07` | Docker Compose (SNSD 단일 노드) | S3 호환, TLS 적용. AGPL-3.0, quay.io 이미지 401(2026-10-17) |
@@ -246,21 +246,9 @@ kubectl get nodes -o wide
 
 ---
 
-### 3.5 Metrics Server 애드온 배포 ([`metrics-server`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/metrics-server/components.yaml))
+### 3.5 Metrics Server 애드온 배포 → Phase 2 의 Harbor 설치 뒤로 이동 ([`35-metrics-server`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/35-metrics-server/README.md))
 
-UiPath Automation Suite의 설치 사전 점검(`uipathctl prereq run`) 및 스케줄러 리소스 체크를 위해 Metrics Server가 필수적입니다.
-
-```bash
-# Control-Plane에서 components.yaml 적용
-kubectl apply -f metrics-server/components.yaml
-
-# 롤아웃 확인
-kubectl -n kube-system rollout status deployment/metrics-server --timeout=120s
-kubectl get apiservice v1beta1.metrics.k8s.io
-
-# 노드 메트릭 수집 확인 (수집까지 약 30~60초 소요)
-kubectl top nodes
-```
+UiPath Automation Suite의 설치 사전 점검(`uipathctl prereq run`)에 Metrics Server가 필요합니다. 에어갭에서는 매니페스트 기본 이미지(`registry.k8s.io`)를 받을 수 없으므로, **30-harbor 를 설치한 뒤** 이미지를 로컬 Harbor에 올리고 그 주소로 배포합니다(4.4.1절).
 
 ---
 
@@ -369,6 +357,22 @@ sudo ./install.sh --test-restart
 1. 웹 브라우저 또는 CLI에서 `https://<HARBOR_HOSTNAME>` 접속 (`admin` / `site.env`에 지정된 패스워드 또는 자동생성값)
 2. Automation Suite 이미지를 저장할 신규 프로젝트 생성: `uipath` (Public으로 설정하거나 Pull Secret 연동 준비)
 3. 모든 K8s 노드 및 워커에서 Harbor 인증서 신뢰 상태 확인 (`docker login <HARBOR_HOSTNAME>`)
+
+---
+
+### 4.4.1 Metrics Server 배포 (로컬 Harbor 경유, [`35-metrics-server`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/35-metrics-server/README.md))
+
+Harbor 가 뜬 뒤 control plane 에서 실행합니다. 이미지를 AS 이미지와 같은 **`uipath` 프로젝트**에 `registry.uipath.com` 경로 그대로(`<harbor>/uipath/rancher/hardened-k8s-metrics-server:v0.9.0-build20260722`) push 하고, containerd 가 Harbor 에서 받는지 먼저 확인한 뒤 배포합니다. 프로젝트가 private 이면 kube-system 에 pull secret 을 만듭니다(`HARBOR_PULL_USER`/`HARBOR_PULL_PASSWORD`, robot 계정 권장).
+
+```bash
+tar xzf metrics-server-v0.9.0.tar.gz && cd metrics-server-v0.9.0
+sudo HARBOR_PASSWORD='<Harbor admin 비밀번호>' ./install.sh
+sudo ./install.sh --check-only     # Deployment·APIService·kubectl top·imageID(Harbor) 판정
+```
+
+> [!IMPORTANT]
+> 파드는 어느 노드에도 뜰 수 있으므로 **모든 노드**가 Harbor 이름을 해석하고 CA 를 신뢰해야 합니다(`05-certs/deploy-certs.sh --nodes ...`).
+> 매니페스트는 `metrics-server/components.yaml` 과 이미지 줄만 다릅니다. 실제 클러스터 배포는 아직 검증하지 않았습니다.
 
 ---
 

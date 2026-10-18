@@ -28,6 +28,14 @@ join-*.txt
 .kiro/
 .omc/
 
+# 저장소 루트의 사이트별 산출물 — 클러스터 접속 정보·실제 입력값·사내 CA
+#   kube_config        : kubeconfig (클러스터 관리자 인증서/토큰)
+#   input-myrobot.json : UiPath AS 실제 입력(호스트명·비밀번호)
+#   *.crt.zip          : 내보낸 인증서 묶음
+/kube_config
+/input-myrobot.json
+/*.crt.zip
+
 # 치환 전 원본 백업
 _local/
 

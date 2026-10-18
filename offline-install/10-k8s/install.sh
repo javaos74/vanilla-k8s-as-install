@@ -287,6 +287,10 @@ run_checks() {
     check "docker ${DOCKER_VERSION}" bash -c "docker --version | grep -q '${DOCKER_VERSION}'"
     check "podman ${PODMAN_STATIC_VERSION#v} (4.9+ 요구사항)" \
         bash -c "podman --version | grep -q '${PODMAN_STATIC_VERSION#v}'"
+    # podman-static 설치가 /usr · /etc 의 소유자를 바꾸지 않았는지(5절 주석 참고).
+    # 바뀌면 그 uid 사용자가 /etc 를 고칠 수 있고, SELinux 계열에서는 SSH 가 막힌다.
+    check "/usr · /etc 소유자 root" \
+        bash -c '[[ "$(stat -c %u /usr)" == 0 && "$(stat -c %u /etc)" == 0 ]]'
 
     # 이미지가 k8s.io 네임스페이스에 있어야 kubelet 이 본다.
     local -a _miss=()
@@ -734,15 +738,28 @@ if [[ -n "$PODMAN_TGZ" ]]; then
     # tarball 구조: podman-linux-amd64/{usr/...,etc/...,README.md}
     # -C / 로 바로 풀면 /podman-linux-amd64 가 생기고, --strip-components=1 만
     # 쓰면 README.md 가 / 에 떨어진다. 임시로 푼 뒤 usr/ 와 etc/ 만 옮긴다.
+    #
+    # 소유권·보안 컨텍스트를 **옮기지 않는다**(실측 사고, 2026-10-18).
+    #   tarball 항목은 빌드 계정 runner(uid 1001) 소유다. root 로 풀면 그 소유가
+    #   유지되고, 예전처럼 `cp -a tmp/usr/. /usr/` 로 옮기면 **/usr 와 /etc 자체**의
+    #   소유자가 1001 로, SELinux 레이블이 /tmp 의 user_tmp_t 로 바뀌었다.
+    #   RHEL(SELinux enforcing)에서는 sshd 가 /usr 를 탐색하지 못해
+    #   `chroot("/usr/share/empty.sshd"): Permission denied` 로 SSH 접속이 막혔다.
+    #   Ubuntu 에서도 /etc 가 uid 1001 소유가 되므로 그 uid 의 사용자가 /etc 를 고칠 수 있다.
+    #   그래서 --no-same-owner 로 풀고, cp 는 아무 속성도 보존하지 않으며(-a 금지:
+    #   기존 디렉터리 /usr /etc 의 소유·모드·레이블을 덮어쓴다), 끝나고 레이블을 복원한다.
     tmp="$(mktemp -d)"
-    tar -C "$tmp" -xzf "$PODMAN_TGZ" --strip-components=1
+    tar -C "$tmp" -xzf "$PODMAN_TGZ" --strip-components=1 --no-same-owner
     [[ -d "${tmp}/usr" ]] || die "podman tarball 구조가 예상과 다르다"
-    cp -a "${tmp}/usr/." /usr/
+    chown -R root:root "$tmp"
+    cp -r "${tmp}/usr/." /usr/
     # /etc/containers (policy.json, registries.conf) 가 없으면 podman 이 동작하지 않는다.
     if [[ -d "${tmp}/etc" ]]; then
-        cp -a --no-clobber "${tmp}/etc/." /etc/ 2>/dev/null || true
+        cp -r -n "${tmp}/etc/." /etc/ 2>/dev/null || true
     fi
     rm -rf "$tmp"
+    # SELinux 가 켜진 계열에서 새 파일에 정책 기본 레이블을 다시 붙인다(Ubuntu 는 no-op).
+    os_restore_file_labels /usr/local /etc/containers
     command -v podman >/dev/null || die "podman 설치 실패(PATH 에 없음)"
     ok "podman $(podman --version | awk '{print $3}') (static)"
 fi

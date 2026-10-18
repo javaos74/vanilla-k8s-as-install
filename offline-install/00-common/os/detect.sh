@@ -101,6 +101,9 @@ ca_trust_update()      { _os_unsupported ca_trust_update; }
 # 갱신 결과가 모이는 CA 번들 파일 경로를 출력한다.
 ca_trust_bundle_file() { _os_unsupported ca_trust_bundle_file; }
 
+# 새로 설치한 파일에 보안 정책 기본 레이블을 다시 붙인다(root). SELinux 가 없는 계열은 no-op.
+os_restore_file_labels() { return 0; }
+
 # 계열별 값. 계열 파일이 채운다.
 #   PKG_EXT             패키지 파일 확장자            (deb)
 #   PKG_BUNDLE_SUBDIR   10-k8s 번들 안 패키지 디렉터리 (debs)

@@ -825,8 +825,42 @@ DNS 차단으로 인한 소음이 거슬리면 `--allow-dns` 를 쓴다. 이름�
 | `ctr images ls` 에는 보이는데 파드는 ImagePullBackOff | 이미지를 기본 네임스페이스에 적재했다 | `ctr -n k8s.io images import` 여야 한다. kubelet 은 `k8s.io` 네임스페이스만 본다 |
 | `control plane 파드 4종 Running` 판정 실패 | init 직후 static 파드가 아직 API 에 등록되지 않았다 | 판정에 120초 대기가 들어 있다. 계속 실패하면 `journalctl -u kubelet` 확인 |
 | `podman: command not found` | tarball 최상위가 `podman-linux-amd64/` 라 `-C /` 로 바로 풀면 `/podman-linux-amd64` 가 생긴다 | 임시 디렉터리에 푼 뒤 `usr/`·`etc/` 만 옮긴다(스크립트가 처리) |
+| **`/usr` · `/etc` 소유자가 uid 1001** (RHEL 은 SSH 접속 불가: `chroot("/usr/share/empty.sshd"): Permission denied`) | (2026-10-18 고침) podman-static tarball 이 빌드 계정 uid 1001 소유인데, 예전 스크립트가 root 로 풀고 `cp -a tmp/usr/. /usr/` 로 옮겨 **`/usr`·`/etc` 자체**의 소유자와 SELinux 레이블(`user_tmp_t`)까지 바꿨다. Ubuntu 에서도 같은 소유 변경이 일어난다(실측 50개 항목) | 지금은 `--no-same-owner` + 속성 비보존 복사 + `restorecon`. 판정 `/usr · /etc 소유자 root` 가 잡는다. **이전 스크립트로 설치한 노드는 아래 복구 절차** |
 | deb 의존성 해결 실패 | 번들이 다른 OS 용이다 | `BUNDLE-INFO` 의 `target_os` 와 `/etc/os-release` 대조 |
 | `apt-get` exit 100 (dpkg lock) | `unattended-upgrades` 와 경쟁 | 스크립트가 `DPkg::Lock::Timeout=900` 을 준다 |
+| `적재되지 않은 이미지: ...` 인데 `ctr -n k8s.io images ls` 에는 보인다 | `ctr images ls -q \| grep -q` 의 오탐. grep 이 첫 일치에서 끝나 ctr 이 SIGPIPE(141)로 죽고 `pipefail` 이 파이프라인을 실패로 판정한다 | 고쳤다. `common.sh` 의 `ctr_missing_images()` 사용. 목록 앞쪽 이미지에서만 간헐 발생한다 |
+| worker 에서 `조인 정보가 부족하다` | `--role worker` 만 주고 토큰을 안 넘겼다 | control plane 에서 `kubeadm token create --print-join-command` 출력을 `--join-command` 로 넘긴다 |
+| `couldn't validate the identity of the API Server` | 토큰이 만료됐다(기본 24시간) | control plane 에서 토큰을 새로 발급한다 |
+| worker 가 계속 `NotReady` | 그 노드에 CNI 이미지가 없어 cilium 파드가 `ImagePullBackOff` | worker 에서 `60-cilium/install.sh --role worker` 실행 |
+| worker 의 PVC 파드가 `ContainerCreating` 에서 멈춤 | 그 노드에 `nfs-common` 또는 CSI 이미지가 없다 | worker 에서 `50-nfs-csi/install.sh --role worker` 실행 |
+| worker 재조인이 실패한다 | control plane 에 옛 노드 객체가 남아 있다 | `kubectl delete node <name>` 후 worker 에서 `--reset` → 재조인 |
+| CP 조인이 `error execution phase control-plane-prepare/download-certs` 로 실패 | `kubeadm-certs` Secret 이 만료됐다(2시간) | 첫 CP 에서 `./install.sh --print-join-command` 재실행해 새 키를 받는다 |
+
+| `--certificate-key 형태가 잘못됐다` | 키가 잘려서 붙여졌다 | 32바이트 AES 키의 hex 이므로 정확히 64자여야 한다 |
+| CP 조인이 etcd 단계에서 멈춘다 | CP 간 2379/2380 이 막혀 있다 | stacked etcd 는 CP 끼리 이 포트로 통신한다. 방화벽/NSG 확인 |
+| CP 를 추가했는데 첫 CP 가 죽으면 같이 멈춘다 | `controlPlaneEndpoint` 없이 init 했다 | 4.1절. 사실상 재구축이 필요하다 |
+| 조인 후 그 노드의 docker 서비스가 죽었다 | deb 재구성으로 docker 데몬이 재시작돼 컨테이너가 순서 없이 일제히 떴다 | Harbor 라면 `sudo systemctl restart harbor.service`. 근거는 4.3절 |
+| Harbor nginx 가 `host not found in upstream "core:8080"` 으로 죽는다 | 위와 같은 원인. nginx 는 업스트림 이름을 못 찾으면 기동 단계에서 끝난다 | `systemctl restart harbor.service` 로 순서대로 다시 올린다 |
+| `kubectl` 이 `x509: certificate is valid for ..., not <LB주소>` | LB 주소가 apiserver 인증서 SAN 에 없다 | `--control-plane-endpoint` 를 주면 자동으로 들어간다. 이미 init 했다면 `--cert-san` 을 넣어 인증서 재발급 필요 |
+| LB 는 살아 있는데 모든 요청이 권한 오류 | LB 가 TLS 를 종료했다(L7 모드) | apiserver 는 클라이언트 인증서로 사용자를 식별한다. `mode tcp` 패스스루여야 한다 |
+| CP 1대를 reset 했더니 남은 CP 들이 쓰기 불가 | 유령 etcd 멤버가 남아 정족수를 잃었다 | 4.0.4절의 `etcdctl member remove` |
+| `etcd 멤버 수 == CP 노드 수` 판정 실패 | 조인이 중간에 실패했거나 제거된 CP 의 멤버가 남았다 | `etcdctl member list` 로 대조 후 불필요한 멤버 제거 |
+
+### 이전 스크립트로 설치한 노드의 `/usr` · `/etc` 소유자 복구
+
+`stat -c %u /usr /etc` 가 `0` 이 아니면 복구한다. 소유자 없는 항목은 전부 podman-static 이
+남긴 것이다(실측).
+
+```bash
+sudo chown root:root /usr /etc
+sudo find /usr /etc -xdev \( -nouser -o -nogroup \) -exec chown -h root:root {} +
+# SELinux 계열(RHEL/Rocky)만
+sudo restorecon -Fv /usr /etc && sudo restorecon -RF /usr/local /etc/containers
+```
+
+RHEL 에서 SSH 가 이미 막혔다면 클라우드 콘솔(Azure: `az vm run-command invoke`)로 위 명령을
+실행한다. 에어갭 상태(`airgap-on.sh`)에서는 VM 에이전트가 플랫폼 주소에 닿지 못해 run-command
+도 동작하지 않으므로 먼저 재부팅해 nftables 규칙을 지운다(규칙은 영구 저장되지 않는다).
 | `적재되지 않은 이미지: ...` 인데 `ctr -n k8s.io images ls` 에는 보인다 | `ctr images ls -q \| grep -q` 의 오탐. grep 이 첫 일치에서 끝나 ctr 이 SIGPIPE(141)로 죽고 `pipefail` 이 파이프라인을 실패로 판정한다 | 고쳤다. `common.sh` 의 `ctr_missing_images()` 사용. 목록 앞쪽 이미지에서만 간헐 발생한다 |
 | worker 에서 `조인 정보가 부족하다` | `--role worker` 만 주고 토큰을 안 넘겼다 | control plane 에서 `kubeadm token create --print-join-command` 출력을 `--join-command` 로 넘긴다 |
 | `couldn't validate the identity of the API Server` | 토큰이 만료됐다(기본 24시간) | control plane 에서 토큰을 새로 발급한다 |

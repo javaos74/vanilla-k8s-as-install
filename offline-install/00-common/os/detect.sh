@@ -101,6 +101,9 @@ ca_trust_update()      { _os_unsupported ca_trust_update; }
 # 갱신 결과가 모이는 CA 번들 파일 경로를 출력한다.
 ca_trust_bundle_file() { _os_unsupported ca_trust_bundle_file; }
 
+# k8s 노드로 쓰기 전 OS 준비(방화벽 등, root). 할 일이 없는 계열은 기본 no-op.
+#   Ubuntu: 없음(ufw 기본 비활성) / RHEL: firewalld 포트·파드 대역
+os_k8s_host_prepare()  { return 0; }
 # 새로 설치한 파일에 보안 정책 기본 레이블을 다시 붙인다(root). SELinux 가 없는 계열은 no-op.
 os_restore_file_labels() { return 0; }
 
@@ -109,7 +112,8 @@ os_restore_file_labels() { return 0; }
 #   PKG_BUNDLE_SUBDIR   10-k8s 번들 안 패키지 디렉터리 (debs)
 #   PKG_NFS_CLIENT      NFS 클라이언트 패키지          (nfs-common)
 #   PKG_NFS_SERVER      NFS 서버 패키지                (nfs-kernel-server)
-PKG_EXT="" PKG_BUNDLE_SUBDIR="" PKG_NFS_CLIENT="" PKG_NFS_SERVER=""
+#   PKG_REMOVE_HINT     패키지 제거 명령 안내          (sudo apt remove)
+PKG_EXT="" PKG_BUNDLE_SUBDIR="" PKG_NFS_CLIENT="" PKG_NFS_SERVER="" PKG_REMOVE_HINT=""
 
 #--- 로드 ---------------------------------------------------------------
 os_detect

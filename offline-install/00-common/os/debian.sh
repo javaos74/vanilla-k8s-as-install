@@ -13,6 +13,7 @@ PKG_EXT="deb"
 PKG_BUNDLE_SUBDIR="debs"
 PKG_NFS_CLIENT="nfs-common"
 PKG_NFS_SERVER="nfs-kernel-server"
+PKG_REMOVE_HINT="sudo apt remove"
 
 #--- 판별 ---------------------------------------------------------------
 # Ubuntu 코드네임(jammy/noble/resolute)을 반환. 지원 목록 밖이면 즉시 중단한다.

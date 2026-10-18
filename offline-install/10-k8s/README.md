@@ -178,6 +178,47 @@ apt-get -s -o Debug::NoLocking=1 -o Dir::State::Lists="$E" \
 이 이미지에는 iptables / nftables 라이브러리가 기본으로 깔려 있어, 수정 전 번들(31개)
 로도 같은 결과가 나왔을 것이다. 누락 버그는 이 라이브러리가 없는 최소 설치에서만 드러난다.
 
+#### RHEL 9 (el9) 번들
+
+RHEL 계열은 `pkgs-rhel.sh` + `rpm-closure.py` 가 rpm 을 모은다. 원리는 Ubuntu 와 같다.
+dnf API 로 **rpmdb 를 읽지 않고**(`fill_sack(load_system_repo=False)`) 폐쇄집합을 계산한 뒤
+기준선(comps 그룹 `core`)을 뺀다.
+
+```bash
+# RHEL 9 빌드 호스트(구독/RHUI 저장소 접근 가능)에서. 컨테이너 빌드는 아직 Ubuntu 전용이다.
+cd offline-install/10-k8s && ./build-bundle.sh      # -> bundle/k8s-1.36.4-el9.tar.gz
+```
+
+- 빌드 호스트에 `/etc/yum.repos.d/vk8s-{kubernetes,docker}.repo` 를 남긴다. skopeo 도 깐다.
+- 같은 호스트를 타깃으로도 쓸 거면 빌드 뒤 `sudo dnf history undo <skopeo 트랜잭션>` 과
+  repo 파일 삭제로 되돌린다(검증은 이렇게 했다).
+- rpm 버전은 deb 와 릴리스가 다르다: `kubeadm-1.36.4-150500.1.1`, `docker-ce-29.8.1-1.el9`.
+- 업그레이드 고정은 `dnf versionlock` 이 기본 설치에 없어 `/etc/dnf/dnf.conf` 의
+  `excludepkgs=` 를 쓴다. 설치·계산 쪽은 `--disableexcludes=all` 로 이 값을 무시한다
+  (설치된 노드를 빌드 호스트로 쓰면 대상 패키지가 걸러지는 문제를 실측으로 고쳤다).
+- firewalld 를 끄지 않는다. 포트(6443, 2379-2380, 10250, 10257, 10259, 8472/udp, 4240,
+  4244, 30000-32767)를 열고 파드 대역을 trusted 존에 넣는다. SELinux 는 enforcing 유지
+  (`container-selinux` 가 번들에 들어 있다).
+
+실서버 검증(2026-10-18, Azure RHEL 9.6, 커널 5.14.0-570, SELinux **Enforcing**,
+firewalld **활성**, `airgap-on.sh` 엄격 모드):
+
+| 항목 | 결과 |
+|---|---|
+| 번들 | rpm 27개(155M) / 아카이브 348M. 기준선 358 → 기준선+대상 385 |
+| 오염된 빌드 호스트(k8s 설치 노드, excludepkgs 있음)에서 재빌드 | 같은 27개 |
+| 설치 전 시뮬레이션(`dnf --disablerepo='*' --assumeno`) | 문제 없음 |
+| `10-k8s/install.sh` | **24/24** (`/usr · /etc 소유자 root` 포함) |
+| `60-cilium/install.sh` | **10/10**, 노드 Ready, 파드 9개 Running |
+| `05-certs` make-certs / deploy-certs --local | **49/49** / **13/13** (`/etc/pki/ca-trust/source/anchors` + `update-ca-trust`, containerd 재시작 후 Ready) |
+| SELinux AVC 거부 | **0** |
+| `airgap-fwd-other` | **0** |
+| 재부팅 후 | SSH 정상, firewalld·docker·containerd·kubelet active, 재판정 24/24 |
+
+검증 중 고친 것: podman-static 설치가 `/usr`·`/etc` 소유자·레이블을 바꿔 SSH 가 막힌 문제
+(7절), dnf API 의 `$releasever`(RHUI EUS 는 `9.6`), 설치된 노드의 `excludepkgs`,
+sudo `secure_path`, RHEL rpm 이 켜지 않는 docker 서비스.
+
 #### 빌드 직후 설치 검증 (build-in-container.sh)
 
 `00-common/build-in-container.sh` 로 10-k8s 를 빌드하면, 끝난 뒤 **같은 이미지로
@@ -828,23 +869,8 @@ DNS 차단으로 인한 소음이 거슬리면 `--allow-dns` 를 쓴다. 이름�
 | **`/usr` · `/etc` 소유자가 uid 1001** (RHEL 은 SSH 접속 불가: `chroot("/usr/share/empty.sshd"): Permission denied`) | (2026-10-18 고침) podman-static tarball 이 빌드 계정 uid 1001 소유인데, 예전 스크립트가 root 로 풀고 `cp -a tmp/usr/. /usr/` 로 옮겨 **`/usr`·`/etc` 자체**의 소유자와 SELinux 레이블(`user_tmp_t`)까지 바꿨다. Ubuntu 에서도 같은 소유 변경이 일어난다(실측 50개 항목) | 지금은 `--no-same-owner` + 속성 비보존 복사 + `restorecon`. 판정 `/usr · /etc 소유자 root` 가 잡는다. **이전 스크립트로 설치한 노드는 아래 복구 절차** |
 | deb 의존성 해결 실패 | 번들이 다른 OS 용이다 | `BUNDLE-INFO` 의 `target_os` 와 `/etc/os-release` 대조 |
 | `apt-get` exit 100 (dpkg lock) | `unattended-upgrades` 와 경쟁 | 스크립트가 `DPkg::Lock::Timeout=900` 을 준다 |
-| `적재되지 않은 이미지: ...` 인데 `ctr -n k8s.io images ls` 에는 보인다 | `ctr images ls -q \| grep -q` 의 오탐. grep 이 첫 일치에서 끝나 ctr 이 SIGPIPE(141)로 죽고 `pipefail` 이 파이프라인을 실패로 판정한다 | 고쳤다. `common.sh` 의 `ctr_missing_images()` 사용. 목록 앞쪽 이미지에서만 간헐 발생한다 |
-| worker 에서 `조인 정보가 부족하다` | `--role worker` 만 주고 토큰을 안 넘겼다 | control plane 에서 `kubeadm token create --print-join-command` 출력을 `--join-command` 로 넘긴다 |
-| `couldn't validate the identity of the API Server` | 토큰이 만료됐다(기본 24시간) | control plane 에서 토큰을 새로 발급한다 |
-| worker 가 계속 `NotReady` | 그 노드에 CNI 이미지가 없어 cilium 파드가 `ImagePullBackOff` | worker 에서 `60-cilium/install.sh --role worker` 실행 |
-| worker 의 PVC 파드가 `ContainerCreating` 에서 멈춤 | 그 노드에 `nfs-common` 또는 CSI 이미지가 없다 | worker 에서 `50-nfs-csi/install.sh --role worker` 실행 |
-| worker 재조인이 실패한다 | control plane 에 옛 노드 객체가 남아 있다 | `kubectl delete node <name>` 후 worker 에서 `--reset` → 재조인 |
-| CP 조인이 `error execution phase control-plane-prepare/download-certs` 로 실패 | `kubeadm-certs` Secret 이 만료됐다(2시간) | 첫 CP 에서 `./install.sh --print-join-command` 재실행해 새 키를 받는다 |
-
-| `--certificate-key 형태가 잘못됐다` | 키가 잘려서 붙여졌다 | 32바이트 AES 키의 hex 이므로 정확히 64자여야 한다 |
-| CP 조인이 etcd 단계에서 멈춘다 | CP 간 2379/2380 이 막혀 있다 | stacked etcd 는 CP 끼리 이 포트로 통신한다. 방화벽/NSG 확인 |
-| CP 를 추가했는데 첫 CP 가 죽으면 같이 멈춘다 | `controlPlaneEndpoint` 없이 init 했다 | 4.1절. 사실상 재구축이 필요하다 |
-| 조인 후 그 노드의 docker 서비스가 죽었다 | deb 재구성으로 docker 데몬이 재시작돼 컨테이너가 순서 없이 일제히 떴다 | Harbor 라면 `sudo systemctl restart harbor.service`. 근거는 4.3절 |
-| Harbor nginx 가 `host not found in upstream "core:8080"` 으로 죽는다 | 위와 같은 원인. nginx 는 업스트림 이름을 못 찾으면 기동 단계에서 끝난다 | `systemctl restart harbor.service` 로 순서대로 다시 올린다 |
-| `kubectl` 이 `x509: certificate is valid for ..., not <LB주소>` | LB 주소가 apiserver 인증서 SAN 에 없다 | `--control-plane-endpoint` 를 주면 자동으로 들어간다. 이미 init 했다면 `--cert-san` 을 넣어 인증서 재발급 필요 |
-| LB 는 살아 있는데 모든 요청이 권한 오류 | LB 가 TLS 를 종료했다(L7 모드) | apiserver 는 클라이언트 인증서로 사용자를 식별한다. `mode tcp` 패스스루여야 한다 |
-| CP 1대를 reset 했더니 남은 CP 들이 쓰기 불가 | 유령 etcd 멤버가 남아 정족수를 잃었다 | 4.0.4절의 `etcdctl member remove` |
-| `etcd 멤버 수 == CP 노드 수` 판정 실패 | 조인이 중간에 실패했거나 제거된 CP 의 멤버가 남았다 | `etcdctl member list` 로 대조 후 불필요한 멤버 제거 |
+| (RHEL) CoreDNS 만 `Pending`/`CrashLoop`, 나머지 Running | firewalld 가 파드 → 노드 IP:6443 을 막는다 | `install.sh` 가 포트를 열고 파드 대역을 trusted 존에 넣는다(`os/rhel.sh`). `firewall-cmd --zone=trusted --list-sources` 확인 |
+| (RHEL) `sudo` 안에서 `helm`/`podman: command not found` | RHEL 의 sudo `secure_path` 에 `/usr/local/bin` 이 없다 | `os/rhel.sh` 가 PATH 앞에 붙인다. 수동 실행 시 `sudo env PATH=$PATH ...` |
 
 ### 이전 스크립트로 설치한 노드의 `/usr` · `/etc` 소유자 복구
 

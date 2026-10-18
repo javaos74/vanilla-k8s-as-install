@@ -274,7 +274,7 @@ run_checks() {
     check "kubeadm ${K8S_VERSION}" bash -c "kubeadm version -o short | grep -q 'v${K8S_VERSION}'"
     check "kubelet ${K8S_VERSION}" bash -c "kubelet --version | grep -q 'v${K8S_VERSION}'"
     check "kubectl ${K8S_VERSION}" bash -c "kubectl version --client -o json 2>/dev/null | grep -q '\"gitVersion\": \"v${K8S_VERSION}\"'"
-    check "kube 패키지 apt-mark hold" \
+    check "kube 패키지 업그레이드 고정(hold)" \
         pkg_is_held kubelet
     check "/opt/cni/bin 존재(kubernetes-cni)" test -x /opt/cni/bin/loopback
 
@@ -573,7 +573,7 @@ step "사전 확인"
 verify_manifest "$BUNDLE_ROOT"
 
 if pkg_installed podman-docker; then
-    die "podman-docker 가 /usr/bin/docker 를 제공해 번들의 docker-ce-cli 와 충돌한다. podman 은 유지한 채 'sudo apt remove podman-docker' 후 설치를 다시 실행할 것."
+    die "podman-docker 가 /usr/bin/docker 를 제공해 번들의 docker-ce-cli 와 충돌한다. podman 은 유지한 채 '${PKG_REMOVE_HINT} podman-docker' 후 설치를 다시 실행할 것."
 fi
 
 # 에어갭이 아니어도 설치는 되지만, 오프라인 검증이라면 경고를 남긴다.
@@ -600,6 +600,9 @@ ok "overlay / br_netfilter 로드"
 install_file "${CONF_DIR}/k8s-sysctl.conf" /etc/sysctl.d/99-k8s.conf
 sysctl --system >/dev/null
 ok "sysctl 적용"
+
+# OS 계열별 준비(RHEL: firewalld 포트·파드 대역. Ubuntu: 없음). os/<계열>.sh
+os_k8s_host_prepare
 
 if [[ -n "$(swapon --show --noheadings)" ]]; then
     log "swap 비활성화"
@@ -649,7 +652,13 @@ ok "${PKG_EXT} 설치 완료"
 
 # 자동 업그레이드로 버전이 바뀌면 클러스터가 깨진다. 반드시 hold.
 pkg_hold kubelet kubeadm kubectl containerd.io
-ok "kubelet/kubeadm/kubectl/containerd.io apt-mark hold"
+
+# docker 데몬 자동기동. Ubuntu 는 deb postinst 가 켜지만 RHEL rpm 은 켜지 않는다.
+# 30-harbor / 20-minio 등 다음 단계가 docker 데몬을 쓴다. 이미 켜져 있으면 아무것도 하지 않는다.
+if systemctl list-unit-files docker.service >/dev/null 2>&1; then
+    systemctl enable --now docker >/dev/null 2>&1 || warn "docker 서비스 기동 실패: journalctl -u docker"
+fi
+ok "kubelet/kubeadm/kubectl/containerd.io 업그레이드 고정(hold)"
 
 #=====================================================================
 # 3. containerd 설정

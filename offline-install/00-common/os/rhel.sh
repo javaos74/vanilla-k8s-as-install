@@ -68,11 +68,13 @@ pkg_install_online() { dnf install -y "$@"; }
 #   --disableexcludes=all  : pkg_hold 가 dnf.conf 에 넣은 excludepkgs 가 재실행 시
 #                            번들 패키지까지 걸러내지 않게 한다
 #   gpgcheck=0             : docker/k8s 서명키는 타깃에 없다. 무결성은 SHA256SUMS 로 본다
+#   metadata_expire=0      : 매번 repodata 를 다시 읽는다. 같은 경로에 새 번들을 풀었을 때
+#                            dnf 캐시의 예전 메타데이터를 쓰면 새 패키지가 "No match" 가 된다(실측)
 _rhel_bundle_dnf() {
     local dir="$1"; shift
     dnf -y --disablerepo='*' --disableexcludes=all \
         --repofrompath="vk8s-bundle,file://$(realpath "$dir")" --enablerepo=vk8s-bundle \
-        --setopt=vk8s-bundle.gpgcheck=0 --setopt=vk8s-bundle.metadata_expire=-1 "$@"
+        --setopt=vk8s-bundle.gpgcheck=0 --setopt=vk8s-bundle.metadata_expire=0 "$@"
 }
 
 pkg_install_bundle_dir() {

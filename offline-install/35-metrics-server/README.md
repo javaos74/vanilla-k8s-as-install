@@ -4,7 +4,7 @@ UiPath Automation Suite 사전 점검(`uipathctl prereq run`)이 요구하는 Me
 에어갭 클러스터에 배포한다. 이미지를 **로컬 Harbor(30-harbor)에 올리고 그 주소로**
 배포한다. 에어갭에서는 매니페스트 기본 주소 `registry.k8s.io` 에 닿지 않는다.
 
-**상태: 매니페스트가 기존 `metrics-server/components.yaml` 과 일치함만 확인했다. 번들 빌드와 클러스터 배포는 검증 서버가 없어 아직 하지 않았다(4절).**
+Rocky Linux 9.8 에어갭 노드에서 Harbor push → 배포 → `kubectl top` 까지 **판정 8/8** 을 확인했다. public / private `uipath` 프로젝트 모두 검증했다(4절).
 
 ---
 
@@ -94,13 +94,23 @@ Harbor 주소로 보인다. 실제로 Harbor 에서 받았는지는 `imageID` �
 
 ## 4. 검증 상태
 
+2026-10-18, Rocky Linux 9.8 Azure 단일 노드(SELinux enforcing, `airgap-on.sh` 엄격 모드),
+30-harbor(사내 CA, 26/26) 위에서.
+
 | 항목 | 결과 |
 |---|---|
-| 원본 이미지 존재·다이제스트·아키텍처·실행 명령 | **확인** (crane, 2026-10-18) |
-| 매니페스트 = `metrics-server/components.yaml` | **일치** (`diff` 결과 이미지 줄 1개만 다름. args·securityContext·APIService 동일) |
-| 스크립트 문법 / shellcheck | **통과** |
-| 번들 빌드 | **미검증** |
-| Harbor push → 클러스터 배포 → `kubectl top` | **미검증** (검증 서버 없음) |
+| 원본 이미지 존재·다이제스트·아키텍처·실행 명령 | **확인** (crane) |
+| 매니페스트 = `metrics-server/components.yaml` | **일치** (`diff` 결과 이미지 줄 1개만 다름) |
+| 번들 빌드 | **완료** (21M, 태그 = 핀 일치) |
+| `uipath` 프로젝트 없음 → public 으로 생성 → push → 배포 | **8/8**, `kubectl top nodes` 정상 |
+| `uipath` 를 private 으로 전환 → 재설치 | **8/8**. pull secret `harbor-uipath-pull` 이 SA 와 파드에 붙음 |
+| private 에서 kubelet 이 secret 으로 받는지 | **확인**. 노드 캐시를 지우고 파드를 다시 띄워 `Pulling` → `Successfully pulled`. 자격증명 없는 `crictl pull` 은 실패 |
+| push 계정 자격증명 잔존 | **없음** (임시 `DOCKER_CONFIG` 삭제, `/root/.docker` 의 auths 비어 있음) |
+| 재부팅 후 | **8/8** |
+
+Harbor 에 올라간 이미지의 다이제스트(`sha256:772eed79…`)는 원본(`sha256:6f27f99a…`)과 다르다.
+`docker load` → `push` 가 매니페스트를 다시 만들기 때문이다(레이어는 같다). 판정은 태그와
+Harbor 경로(`imageID`)로 본다.
 
 ---
 

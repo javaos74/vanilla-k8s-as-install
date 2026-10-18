@@ -70,9 +70,10 @@ pkgs_download() {
         "docker-buildx-plugin-${DOCKER_BUILDX_VERSION}-1.${el}"
         "docker-compose-plugin-${DOCKER_COMPOSE_VERSION}-1.${el}"
     )
-    # 기준선에 없으면 번들에 넣어야 하는 OS 패키지. 기준선(@core)에 이미 있는 것
-    # (iptables-nft / nftables / iproute / kmod / ethtool)은 넣지 않는다. 같은 이름의
-    # 다른 버전 rpm 을 넣으면 dnf 가 타깃의 패키지를 바꾸려 하기 때문이다.
+    # OS 패키지. 기준선(@core)에 있어도 번들에 넣는다. 클라우드 이미지가 기준선을 다
+    # 갖고 있지 않을 수 있다(실측: Rocky 9.8 Azure 이미지에 nftables 가 없어
+    # "No match for argument: nftables" 로 설치 실패). 설치는 이름으로 하므로(install.list)
+    # 타깃에 이미 있는 패키지는 버전이 바뀌지 않는다.
     local -a OS_DEPS=(
         conntrack-tools socat ethtool iptables-nft iproute kmod
         nfs-utils           # 50-nfs-csi 단계에서 필요

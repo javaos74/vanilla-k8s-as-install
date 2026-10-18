@@ -31,7 +31,11 @@ ALLOW_DNS=0
 
 [[ "${EUID}" -eq 0 ]] || { echo "root 권한 필요 (sudo)" >&2; exit 1; }
 command -v nft >/dev/null 2>&1 || {
-    echo "nft 가 없다. 온라인 상태에서 먼저 설치할 것: sudo apt-get install -y nftables" >&2
+    echo "nft 가 없다. 먼저 설치할 것." >&2
+    echo "  Ubuntu (온라인): sudo apt-get install -y nftables" >&2
+    echo "  RHEL/Rocky (10-k8s 번들에서, 오프라인):" >&2
+    echo "    sudo dnf -y --disablerepo='*' --repofrompath=vk8s-bundle,file://\$PWD/rpms --enablerepo=vk8s-bundle --setopt=vk8s-bundle.gpgcheck=0 install nftables" >&2
+    echo "  (실측: Rocky 9.8 Azure 이미지에는 nftables 가 없다)" >&2
     exit 1
 }
 

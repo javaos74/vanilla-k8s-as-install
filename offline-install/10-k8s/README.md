@@ -243,8 +243,30 @@ firewalld **활성**, vCPU 2, `airgap-on.sh` 엄격 모드):
 | SELinux AVC 거부 / `airgap-fwd-other` | **0** / **0** |
 | 재부팅 후 | SSH 정상, 서비스 전부 active, br_netfilter 로드, 재판정 24/24 |
 
-로컬 저장소 방식과 버전 결합 처리는 RHEL 10.2 에서만 검증했다. RHEL 9.6 검증(위 표)은 그
-이전의 "rpm 파일 전부 설치" 방식이었고, 9.6 VM 이 없어져 새 방식으로는 다시 확인하지 못했다.
+Rocky Linux 9.8 실서버 검증(2026-10-18, Azure, 커널 5.14.0-687.10.1.el9_8, SELinux **Enforcing**,
+firewalld **미설치**, vCPU 2, `airgap-on.sh` 엄격 모드). 로컬 저장소 방식의 el9 검증이다:
+
+| 항목 | 결과 |
+|---|---|
+| 번들 | rpm 36개(158M). 번들 34 + 버전 결합 추가 빌드(nftables, sssd-nfs-idmap) |
+| 이미지의 기준선 누락 | @core 325개 중 22개 없음(nftables · firewalld · ipset · 펌웨어 등) |
+| 설치 전 시뮬레이션 | 문제 없음(18개 신규) |
+| `10-k8s` / `60-cilium` / `05-certs` | **24/24** / **10/10** / **49/49 + 13/13** |
+| `30-harbor` (사내 CA) / `35-metrics-server` | **26/26** / **8/8** |
+| SELinux AVC 거부 / `airgap-fwd-other` | **0** / **0** |
+| 재부팅 후 | 10-k8s 24/24, Harbor 26/26, metrics-server 8/8, `kubectl top` 정상 |
+
+Rocky 검증 중 고친 것:
+- **이름으로 준 OS 패키지는 기준선에 있어도 번들에 넣는다.** 이 이미지에는 @core 의
+  `nftables` 가 없어 `No match for argument: nftables` 로 설치가 실패했다. 이름으로 설치하므로
+  이미 깔린 패키지는 바뀌지 않는다.
+- **로컬 저장소 메타데이터를 캐시하지 않는다**(`metadata_expire=0`). 같은 경로에 새 번들을 풀었을 때
+  dnf 캐시의 예전 repodata 를 써서 새로 넣은 패키지가 `No match` 가 됐다.
+- 버전 결합 빌드에서 다른 아키텍처(i686)를 뺐다.
+- `nft` 가 없는 이미지에서는 `airgap-on.sh` 전에 번들 저장소로 `nftables` 를 먼저 설치한다
+  (스크립트가 명령을 안내한다).
+
+RHEL 9.6 검증(위 첫 표)은 로컬 저장소 방식 이전이다. 같은 el9 계열인 Rocky 9.8 로 새 방식을 확인했다.
 
 검증 중 고친 것: podman-static 설치가 `/usr`·`/etc` 소유자·레이블을 바꿔 SSH 가 막힌 문제
 (7절), dnf API 의 `$releasever`(RHUI EUS 는 `9.6`), 설치된 노드의 `excludepkgs`,

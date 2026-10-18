@@ -20,7 +20,7 @@
 #   설치 시 dnf 가 타깃에 맞는 것을 고르게 한다(번들을 로컬 저장소로 쓴다).
 #
 # 출력(탭 구분):
-#   EXTRA    <이름>  <NEVRA>   번들에 넣을 패키지(기준선+대상 - 기준선)
+#   EXTRA    <이름>  <NEVRA>   번들에 넣을 패키지(기준선+대상 - 기준선, 이름으로 준 패키지 포함)
 #   COUPLED  <이름>  <NEVRA>   위 중 버전 결합된 것의 같은 dist 모든 빌드
 #   ALLVER   <이름>  <NEVRA>   --all-versions 로 요청한 패키지의 같은 dist 모든 빌드
 # 요약은 stderr 에 쓴다. 실패 시 0 이 아닌 값으로 끝난다.
@@ -86,8 +86,9 @@ def exact_names(reldeps):
     return names
 
 
-def all_versions(base, name, dist):
-    q = base.sack.query().available().filter(name=name)
+def all_versions(base, name, dist, arches=("x86_64", "noarch")):
+    # 다른 아키텍처 빌드(i686 등)는 넣지 않는다(실측: nftables i686 가 함께 받아졌다).
+    q = base.sack.query().available().filter(name=name, arch=list(arches))
     return sorted((p for p in q if dist and dist in p.release), key=nevra)
 
 
@@ -103,6 +104,12 @@ def main():
     base_set = resolve(base, a.group, [])
     joint = resolve(base, a.group, a.pkg)
     extras = {n: p for n, p in joint.items() if n not in base_set}
+    # 이름만 준 패키지(OS 의존 패키지)는 기준선에 있어도 넣는다. 클라우드 이미지가
+    # 기준선(@core)을 다 갖고 있지 않을 수 있다(실측: Rocky 9.8 Azure 이미지에 nftables /
+    # firewalld / ipset 이 없었다). 설치는 이름으로 하므로 이미 깔린 패키지는 바뀌지 않는다.
+    for spec in a.pkg:
+        if spec in joint and spec not in extras:
+            extras[spec] = joint[spec]
 
     for n in sorted(extras):
         print("EXTRA\t%s\t%s" % (n, nevra(extras[n])))

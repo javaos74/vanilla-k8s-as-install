@@ -296,6 +296,7 @@ API 200, 재판정 26/26.
 
 | 증상 | 원인 | 조치 |
 |---|---|---|
+| (Rocky 9.8 실측) 05-certs 없이 설치하면 판정의 `docker login` 이 `x509: certificate signed by unknown authority` 로 실패 | 자가서명 인증서(`CA:FALSE`)를 `/etc/docker/certs.d/<host>/ca.crt` 로 신뢰시키는 경로. 원인은 아직 확정하지 못했다 | 05-certs `make-certs.sh` + `deploy-certs.sh --local` 을 먼저 하고 `install.sh` 를 다시 실행한다(사내 CA 로 바뀌어 26/26 확인) |
 | 재부팅 후 대부분의 컨테이너가 없음, `exit 128` + `dial tcp 127.0.0.1:1514` | 기동 순서 미보장 | 3절. `harbor.service` 가 enabled 인지 확인 |
 | `docker login` 이 `x509: certificate signed by unknown authority` | `certs.d` 에 CA 미배치 | 5절 |
 | `docker login` 이 되는데 다른 Harbor 로 붙는다 | `/etc/hosts` 가 다른 IP 를 가리킨다 | 4절. `getent hosts <이름>` 으로 확인 |

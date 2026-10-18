@@ -149,9 +149,34 @@ WARN 핵심 시스템 패키지: systemd_255.4-1ubuntu8.17_amd64.deb
 FATAL 번들에 핵심 시스템 패키지가 섞였다. 이 번들을 쓰면 타깃이 손상될 수 있다.
 ```
 
-타깃 노드는 기준선(`ubuntu-server-minimal`)의 패키지를 갖고 있어야 한다. Ubuntu
-Server 설치본은 보통 이를 포함하지만 이번에 실제 설치본으로 확인하지는 않았다.
-타깃에서 `dpkg -s ubuntu-server-minimal` 로 확인할 것.
+타깃 노드는 기준선의 **개별 패키지**를 갖고 있어야 한다. `ubuntu-server-minimal`
+메타패키지 자체는 필요 없다. 실측(2026-10-18): Azure Ubuntu Server 26.04 이미지와
+Desktop 설치본(192.168.0.28) 모두 `ubuntu-server-minimal` 이 없지만 번들 37개가
+의존성 문제 없이 풀렸고, Azure 서버에서는 실제 설치까지 끝났다(아래 표).
+
+타깃에서 설치 전에 확인하려면 저장소를 끄고 "설치된 패키지 + 번들"만으로 시뮬레이션한다.
+시스템을 바꾸지 않는다.
+
+```bash
+E=$(mktemp -d); mkdir -p "$E/partial"
+apt-get -s -o Debug::NoLocking=1 -o Dir::State::Lists="$E" \
+    -o Dir::Etc::sourcelist=/dev/null -o Dir::Etc::sourceparts=/dev/null \
+    install ./debs/*.deb | grep -E 'unmet|E:' || echo "의존성 문제 없음"
+```
+
+실서버 검증(2026-10-18, Azure Ubuntu Server 26.04.1 새 VM, 커널 7.0.0-1017-azure,
+`airgap-on.sh` 엄격 모드):
+
+| 항목 | 결과 |
+|---|---|
+| 설치 전 시뮬레이션 | 문제 없음 (22개 신규 설치, 나머지는 이미 있음) |
+| `10-k8s/install.sh` (control plane) | **23/23**. dpkg 1차 설치에서 바로 성공(의존성 정리 단계 없음), `dpkg --audit` 깨끗함 |
+| `60-cilium/install.sh` | **10/10**, 노드 Ready, 시스템 파드 전부 Running |
+| `05-certs` make-certs / deploy-certs --local | **49/49** / **13/13** (containerd `config_path` 적용·재시작 후에도 Ready) |
+| `airgap-fwd-other` | **0** (`airgap-out-other` 49 = 호스트 프로브) |
+
+이 이미지에는 iptables / nftables 라이브러리가 기본으로 깔려 있어, 수정 전 번들(31개)
+로도 같은 결과가 나왔을 것이다. 누락 버그는 이 라이브러리가 없는 최소 설치에서만 드러난다.
 
 #### 빌드 직후 설치 검증 (build-in-container.sh)
 

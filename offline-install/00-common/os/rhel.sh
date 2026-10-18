@@ -60,13 +60,46 @@ pkg_install_build_tool() { sudo dnf install -y -q "$@"; }
 pkg_install_online() { dnf install -y "$@"; }
 
 # 번들의 rpm 을 저장소 없이 설치한다.
+#   번들에 repodata/ 와 install.list 가 있으면 번들을 **로컬 저장소**로 놓고 이름으로
+#   설치한다. 같은 이름의 여러 빌드(버전 결합 패키지, 커널 부속 모듈) 중 타깃의 기준선
+#   패키지와 맞는 것을 dnf 가 고르게 하기 위해서다(10-k8s/rpm-closure.py 머리말).
+#   없으면(예전 번들) 디렉터리의 rpm 을 전부 설치한다.
 #   --disablerepo='*'      : 인터넷/사내 저장소를 쓰지 않는다(에어갭 검증 조건)
 #   --disableexcludes=all  : pkg_hold 가 dnf.conf 에 넣은 excludepkgs 가 재실행 시
-#                            번들 파일까지 걸러내지 않게 한다
+#                            번들 패키지까지 걸러내지 않게 한다
+#   gpgcheck=0             : docker/k8s 서명키는 타깃에 없다. 무결성은 SHA256SUMS 로 본다
+_rhel_bundle_dnf() {
+    local dir="$1"; shift
+    dnf -y --disablerepo='*' --disableexcludes=all \
+        --repofrompath="vk8s-bundle,file://$(realpath "$dir")" --enablerepo=vk8s-bundle \
+        --setopt=vk8s-bundle.gpgcheck=0 --setopt=vk8s-bundle.metadata_expire=-1 "$@"
+}
+
 pkg_install_bundle_dir() {
     local dir="$1"
-    dnf -y --disablerepo='*' --disableexcludes=all install "$dir"/*.rpm \
-        || die "rpm 설치 실패. 번들이 다른 RHEL 주 버전용이거나 기준선(@core) 패키지가 없을 수 있다."
+    if [[ -d "${dir}/repodata" && -f "${dir}/install.list" ]]; then
+        local -a want=()
+        mapfile -t want < <(grep -v '^\s*$' "${dir}/install.list")
+        _rhel_bundle_dnf "$dir" install "${want[@]}" \
+            || die "rpm 설치 실패. 타깃 기준선(@core) 패키지가 없거나 빌드 호스트와 부 버전이 다를 수 있다."
+    else
+        dnf -y --disablerepo='*' --disableexcludes=all install "$dir"/*.rpm \
+            || die "rpm 설치 실패. 번들이 다른 RHEL 주 버전용이거나 기준선(@core) 패키지가 없을 수 있다."
+    fi
+}
+
+# br_netfilter 등 k8s 가 쓰는 커널 모듈이 없으면 번들에서 채운다(modprobe 전에 호출).
+#   RHEL 10: br_netfilter 가 kernel-modules-extra 로 옮겨졌다. 실행 중 커널과 정확히 같은
+#   빌드가 필요하므로 번들에 같은 부 버전의 모든 빌드를 넣고 여기서 고른다.
+os_kernel_modules_prepare() {
+    local dir="$1" k; k="$(uname -r)"
+    modinfo br_netfilter >/dev/null 2>&1 && return 0
+    [[ -d "${dir}/repodata" ]] || die "br_netfilter 모듈이 없고 번들 저장소도 없다 (커널 ${k})"
+    log "br_netfilter 없음 — 번들에서 kernel-modules-extra-${k} 설치"
+    _rhel_bundle_dnf "$dir" install "kernel-modules-extra-${k}" \
+        || die "번들에 커널 ${k} 용 kernel-modules-extra 가 없다. 빌드 호스트와 같은 부 버전 커널인지 확인할 것."
+    modinfo br_netfilter >/dev/null 2>&1 || die "kernel-modules-extra 설치 후에도 br_netfilter 가 없다"
+    ok "kernel-modules-extra-${k}"
 }
 
 pkg_install_file() {

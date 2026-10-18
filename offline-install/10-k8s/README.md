@@ -178,7 +178,7 @@ apt-get -s -o Debug::NoLocking=1 -o Dir::State::Lists="$E" \
 이 이미지에는 iptables / nftables 라이브러리가 기본으로 깔려 있어, 수정 전 번들(31개)
 로도 같은 결과가 나왔을 것이다. 누락 버그는 이 라이브러리가 없는 최소 설치에서만 드러난다.
 
-#### RHEL 9 (el9) 번들
+#### RHEL 9 / 10 (el9 / el10) 번들
 
 RHEL 계열은 `pkgs-rhel.sh` + `rpm-closure.py` 가 rpm 을 모은다. 원리는 Ubuntu 와 같다.
 dnf API 로 **rpmdb 를 읽지 않고**(`fill_sack(load_system_repo=False)`) 폐쇄집합을 계산한 뒤
@@ -196,6 +196,21 @@ cd offline-install/10-k8s && ./build-bundle.sh      # -> bundle/k8s-1.36.4-el9.t
 - 업그레이드 고정은 `dnf versionlock` 이 기본 설치에 없어 `/etc/dnf/dnf.conf` 의
   `excludepkgs=` 를 쓴다. 설치·계산 쪽은 `--disableexcludes=all` 로 이 값을 무시한다
   (설치된 노드를 빌드 호스트로 쓰면 대상 패키지가 걸러지는 문제를 실측으로 고쳤다).
+- **번들을 로컬 저장소로 설치한다.** 빌드 때 `createrepo_c` 로 `rpms/repodata/` 를 만들고
+  `rpms/install.list`(핀 버전 + OS 패키지 이름)를 이름으로 설치한다
+  (`dnf --repofrompath ... --disablerepo='*'`). 같은 이름의 여러 빌드 중 타깃에 맞는 것을
+  dnf 가 고르게 하기 위해서다.
+- **버전 결합 패키지는 같은 부 버전의 모든 빌드를 넣는다.** 기준선 패키지와 `=` 로 묶인
+  번들 패키지(실측: `sssd-common` → `(sssd-nfs-idmap = <같은 버전> if libnfsidmap)`)는
+  타깃 이미지의 패치 수준이 빌드 시점 저장소보다 낮으면 최신 빌드 하나로는 충돌한다.
+  RHEL 10.2 Azure 이미지의 `sssd-common 2.12.0-3.el10_2.1` 이 그랬다(저장소 최신 `.el10_2.2`).
+  `rpm-closure.py --dist el10_2` 가 이런 패키지를 찾아 `el10_2` 빌드를 전부 넣는다.
+- **RHEL 10 은 `br_netfilter` 가 `kernel-modules-extra` 에 있다**(실측: `modprobe: FATAL:
+  Module br_netfilter not found`). 실행 중 커널과 같은 빌드가 필요하므로 같은 부 버전의
+  `kernel-modules-extra` 빌드를 전부 넣고(10.2: 40개, 약 125M), `install.sh` 가 modprobe
+  전에 `kernel-modules-extra-$(uname -r)` 를 설치한다(`os_kernel_modules_prepare`).
+- 타깃은 빌드 호스트와 **같은 부 버전**(예: 둘 다 10.2)이어야 한다. 부 버전이 다르면
+  결합 패키지와 커널 모듈의 맞는 빌드가 번들에 없다.
 - firewalld 를 끄지 않는다. 포트(6443, 2379-2380, 10250, 10257, 10259, 8472/udp, 4240,
   4244, 30000-32767)를 열고 파드 대역을 trusted 존에 넣는다. SELinux 는 enforcing 유지
   (`container-selinux` 가 번들에 들어 있다).
@@ -214,6 +229,22 @@ firewalld **활성**, `airgap-on.sh` 엄격 모드):
 | SELinux AVC 거부 | **0** |
 | `airgap-fwd-other` | **0** |
 | 재부팅 후 | SSH 정상, firewalld·docker·containerd·kubelet active, 재판정 24/24 |
+
+RHEL 10.2 실서버 검증(2026-10-18, Azure, 커널 6.12.0-211.40.1.el10_2, SELinux **Enforcing**,
+firewalld **활성**, vCPU 2, `airgap-on.sh` 엄격 모드):
+
+| 항목 | 결과 |
+|---|---|
+| 번들 | rpm 28개 + 추가 빌드 43개(sssd-nfs-idmap 3 + kernel-modules-extra 40) = 70개(280M). 기준선 352 → 385 |
+| 설치 전 시뮬레이션 | dnf 가 타깃에 맞는 `sssd-nfs-idmap-2.12.0-3.el10_2.1` 과 `kernel-modules-extra-6.12.0-211.40.1` 을 골랐다 |
+| `10-k8s/install.sh` | **24/24** (kernel-modules-extra 자동 설치 → br_netfilter 로드) |
+| `60-cilium/install.sh` | **10/10**, 노드 Ready, 파드 9개 Running |
+| `05-certs` | **49/49** / **13/13** |
+| SELinux AVC 거부 / `airgap-fwd-other` | **0** / **0** |
+| 재부팅 후 | SSH 정상, 서비스 전부 active, br_netfilter 로드, 재판정 24/24 |
+
+로컬 저장소 방식과 버전 결합 처리는 RHEL 10.2 에서만 검증했다. RHEL 9.6 검증(위 표)은 그
+이전의 "rpm 파일 전부 설치" 방식이었고, 9.6 VM 이 없어져 새 방식으로는 다시 확인하지 못했다.
 
 검증 중 고친 것: podman-static 설치가 `/usr`·`/etc` 소유자·레이블을 바꿔 SSH 가 막힌 문제
 (7절), dnf API 의 `$releasever`(RHUI EUS 는 `9.6`), 설치된 노드의 `excludepkgs`,

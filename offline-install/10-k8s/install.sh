@@ -594,6 +594,8 @@ log "노드 IP=${NODE_IP} / 노드명=${NODE_NAME} / 역할=${ROLE}"
 step "커널 모듈 · swap · sysctl"
 
 install_file "${CONF_DIR}/k8s-modules.conf" /etc/modules-load.d/k8s.conf
+# 계열에 따라 모듈 패키지를 먼저 채운다(RHEL 10: kernel-modules-extra). os/<계열>.sh
+os_kernel_modules_prepare "$PKG_DIR"
 modprobe overlay && modprobe br_netfilter
 ok "overlay / br_netfilter 로드"
 

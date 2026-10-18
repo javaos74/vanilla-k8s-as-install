@@ -104,6 +104,9 @@ ca_trust_bundle_file() { _os_unsupported ca_trust_bundle_file; }
 # k8s 노드로 쓰기 전 OS 준비(방화벽 등, root). 할 일이 없는 계열은 기본 no-op.
 #   Ubuntu: 없음(ufw 기본 비활성) / RHEL: firewalld 포트·파드 대역
 os_k8s_host_prepare()  { return 0; }
+# k8s 가 쓰는 커널 모듈(br_netfilter 등)을 modprobe 전에 갖춘다(root). 인자: 번들 패키지 디렉터리.
+#   Ubuntu: 기본 커널에 있다 / RHEL 10: kernel-modules-extra
+os_kernel_modules_prepare() { return 0; }
 # 새로 설치한 파일에 보안 정책 기본 레이블을 다시 붙인다(root). SELinux 가 없는 계열은 no-op.
 os_restore_file_labels() { return 0; }
 

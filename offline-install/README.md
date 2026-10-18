@@ -1,6 +1,6 @@
 # offline-install — 에어갭 환경 Vanilla K8s 및 UiPath Automation Suite 오프라인 설치 가이드
 
-인터넷에 연결되지 않은 완전 폐쇄망(Air-gapped) 환경의 Ubuntu 22.04 / 24.04 / 26.04 및 RHEL 9 노드에 **Kubernetes v1.36.4** 클러스터를 구축하고, 그 위에 **UiPath Automation Suite(v2.2510.4)** 및 필수 인프라 서비스(NFS-CSI, MinIO, Harbor, HAProxy, MSSQL/PostgreSQL, Redis)를 단계별로 설치·운영하기 위한 종합 엔드투엔드 가이드입니다.
+인터넷에 연결되지 않은 완전 폐쇄망(Air-gapped) 환경의 Ubuntu 22.04 / 24.04 / 26.04 및 RHEL 9 / 10 노드에 **Kubernetes v1.36.4** 클러스터를 구축하고, 그 위에 **UiPath Automation Suite(v2.2510.4)** 및 필수 인프라 서비스(NFS-CSI, MinIO, Harbor, HAProxy, MSSQL/PostgreSQL, Redis)를 단계별로 설치·운영하기 위한 종합 엔드투엔드 가이드입니다.
 
 > [!NOTE]
 > 저장소 루트의 `README.md`는 인터넷이 연결된 환경 기준의 온라인 설치 절차입니다.  
@@ -55,7 +55,7 @@ flowchart TD
 
 | 구성 요소 | 버전 | 유형 / 배포 방식 | 비고 |
 |---|---|---|---|
-| **OS** | Ubuntu 22.04 / 24.04 / 26.04 LTS, RHEL 9 (9.6 검증) | Linux Host (amd64) | 10-k8s 패키지 번들은 OS 별(코드네임 / el9). RHEL 은 SELinux enforcing · firewalld 활성 상태로 검증 |
+| **OS** | Ubuntu 22.04 / 24.04 / 26.04 LTS, RHEL 9 (9.6) / 10 (10.2) | Linux Host (amd64) | 10-k8s 패키지 번들은 OS 별(코드네임 / el9 / el10), RHEL 은 빌드 호스트와 타깃의 부 버전이 같아야 함. RHEL 은 SELinux enforcing · firewalld 활성 상태로 검증 |
 | **Kubernetes** | **v1.36.4** | deb / kubeadm, containerd v2.3.5 | CRI: containerd (`SystemdCgroup = true`) |
 | **CNI (Cilium)** | **v1.20.2** | Helm 차트 + 컨테이너 이미지 | VXLAN tunnel (UDP 8472), kube-proxy 유지 |
 | **Metrics Server** | **v0.9.0** | K8s 애드온 Manifest | `--kubelet-insecure-tls` 적용 |
@@ -143,14 +143,14 @@ OS 마다 달라지는 부분(패키지 관리자, CA 신뢰 저장소, 패키�
 |---|---|
 | `os/detect.sh` | `/etc/os-release` 로 `OS_FAMILY`(debian / rhel / unknown) 판별, 인터페이스 정의, 계열 파일 로드 |
 | `os/debian.sh` | Ubuntu 구현 (apt / dpkg / `update-ca-certificates`) |
-| `os/rhel.sh` | RHEL 9 구현 (dnf / rpm / `update-ca-trust`, firewalld 포트, SELinux 레이블 복원) |
+| `os/rhel.sh` | RHEL 9/10 구현 (번들을 로컬 저장소로 dnf 설치, `update-ca-trust`, firewalld 포트, SELinux 레이블 복원, RHEL 10 `kernel-modules-extra`) |
 | `10-k8s/pkgs-debian.sh` | 10-k8s 번들의 deb 수집(빌드 전용) |
 | `10-k8s/pkgs-rhel.sh` + `rpm-closure.py` | 10-k8s 번들의 rpm 수집(빌드 전용, RHEL 9 호스트에서) |
 
 - 모든 번들의 `00-common/` 에 `os/` 가 함께 들어갑니다.
 - 구현이 없는 계열에서 OS 기능을 호출하면 `이 OS 에서는 아직 지원하지 않는 기능: <함수>` 로 중단합니다.
 - macOS 관리 호스트처럼 `/etc/os-release` 가 없는 곳에서도 `common.sh` 는 읽힙니다(`OS_FAMILY=unknown`). `make-certs.sh` 처럼 OS 와 무관한 스크립트는 그대로 동작합니다.
-- RHEL 9 는 10-k8s · 60-cilium · 05-certs 를 검증했습니다(10-k8s README 3절). 20~80 단계와 Rocky 는 아직 검증하지 않았습니다. RHEL 번들은 컨테이너가 아니라 RHEL 9 빌드 호스트에서 직접 만듭니다.
+- RHEL 9.6 / 10.2 에서 10-k8s · 60-cilium · 05-certs 를 검증했습니다(10-k8s README 3절). 20~80 단계와 Rocky 는 아직 검증하지 않았습니다. RHEL 번들은 컨테이너가 아니라 RHEL 9 빌드 호스트에서 직접 만듭니다.
 
 ---
 

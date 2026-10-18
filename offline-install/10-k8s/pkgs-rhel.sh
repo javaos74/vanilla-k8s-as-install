@@ -83,30 +83,38 @@ pkgs_download() {
     # 빈 rpmdb 로 폐쇄집합을 계산하고 기준선을 뺀다(rpm-closure.py).
     #   번들 = 폐쇄집합(기준선 + 대상) - 폐쇄집합(기준선)
     # 빌드 호스트에 무엇이 깔려 있든 결과가 같다. pkgs-debian.sh 와 같은 원리다.
+    #
+    # 버전 결합 패키지(기준선과 '=' 로 묶인 것)와 커널 부속 모듈은 같은 부 버전의
+    # 모든 빌드를 넣는다. 타깃의 기준선 패치 수준이 빌드 시점 저장소보다 낮아도
+    # 설치 시 dnf 가 맞는 빌드를 고른다(rpm-closure.py 머리말 참고).
     #-----------------------------------------------------------------
+    local minor="${OS_VERSION_ID#*.}"; [[ "$minor" == "$OS_VERSION_ID" ]] && minor=0
+    local dist="el${major}_${minor}"
+    # RHEL 10 은 br_netfilter 가 kernel-modules-extra 로 옮겨졌다(실측: RHEL 10.2 Azure,
+    # modprobe: FATAL: Module br_netfilter not found). 커널 빌드마다 다른 패키지라
+    # 타깃 커널을 미리 알 수 없으므로 같은 부 버전의 모든 빌드를 넣는다.
+    local -a allver=()
+    ((major >= 10)) && allver+=(--all-versions kernel-modules-extra)
+
     local closure="${SCRIPT_DIR}/rpm-closure.py"
     local -a gargs=() pargs=()
     local g s
     for g in "${RHEL_BASELINE_GROUPS[@]}"; do gargs+=(--group "$g"); done
     for s in "${PINNED[@]}" "${OS_DEPS[@]}"; do pargs+=(--pkg "$s"); done
 
-    log "의존성 폐쇄집합 계산 (기준선: @${RHEL_BASELINE_GROUPS[*]})"
-    local base_list joint_list
-    base_list="$(sudo python3 "$closure" "${gargs[@]}" | LC_ALL=C sort)" \
-        || die "기준선 폐쇄집합 계산 실패"
-    joint_list="$(sudo python3 "$closure" "${gargs[@]}" "${pargs[@]}" | LC_ALL=C sort)" \
-        || die "기준선+대상 폐쇄집합 계산 실패. versions.env 의 rpm 버전 핀을 확인할 것."
+    log "의존성 폐쇄집합 계산 (기준선: @${RHEL_BASELINE_GROUPS[*]}, dist ${dist})"
+    local out
+    out="$(sudo python3 "$closure" "${gargs[@]}" "${pargs[@]}" --dist "$dist" "${allver[@]}")" \
+        || die "rpm 폐쇄집합 계산 실패. versions.env 의 rpm 버전 핀과 저장소를 확인할 것."
 
-    local -a EXTRA=()
-    mapfile -t EXTRA < <(LC_ALL=C join -t $'\t' -v2 \
-        <(cut -f1 <<<"$base_list") <(echo "$joint_list") | cut -f2)
-    log "기준선 $(wc -l <<<"$base_list")개 / 기준선+대상 $(wc -l <<<"$joint_list")개 -> 번들 ${#EXTRA[@]}개"
+    local -a EXTRA=() MULTI=()
+    mapfile -t EXTRA < <(awk -F'\t' '$1=="EXTRA"{print $3}' <<<"$out")
+    mapfile -t MULTI < <(awk -F'\t' '$1=="COUPLED"||$1=="ALLVER"{print $3}' <<<"$out" | sort -u)
     ((${#EXTRA[@]} > 0)) || die "번들에 넣을 rpm 이 없다(계산 오류)"
+    log "번들 ${#EXTRA[@]}개 + 추가 빌드 ${#MULTI[@]}개 (버전 결합: $(awk -F'\t' '$1=="COUPLED"{print $2}' <<<"$out" | sort -u | tr '\n' ' ')$( ((major>=10)) && echo '/ kernel-modules-extra'))"
 
-    # NEVRA(이름-에포크:버전-릴리스.아키텍처)로 정확히 그 빌드를 받는다.
-    # dnf download 는 에포크를 0 이면 생략한 이름도 받지만, 명시가 안전하다.
-    log "rpm 다운로드 (${#EXTRA[@]}개)"
-    sudo dnf -q -y --disableexcludes=all download --destdir "$RPM_DIR" "${EXTRA[@]}" >/dev/null \
+    log "rpm 다운로드"
+    sudo dnf -q -y --disableexcludes=all download --destdir "$RPM_DIR" "${EXTRA[@]}" "${MULTI[@]}" >/dev/null \
         || die "rpm 다운로드 실패"
     sudo chown -R "$(id -u):$(id -g)" "$RPM_DIR" 2>/dev/null || true
 
@@ -119,7 +127,15 @@ pkgs_download() {
     done
     ((${#missing[@]} == 0)) || die "받지 못한 rpm: ${missing[*]}"
 
-    PKG_COUNT="$(find "$RPM_DIR" -name '*.rpm' | wc -l)"
+    # 설치는 번들을 로컬 저장소로 놓고 "이름으로" 한다(os/rhel.sh pkg_install_bundle_dir).
+    # 그래야 같은 이름의 여러 빌드 중 타깃에 맞는 것을 dnf 가 고른다.
+    # install.list = 설치 요청 목록. 핀 버전 + OS 패키지 이름(이미 있으면 dnf 가 건너뛴다).
+    printf '%s\n' "${PINNED[@]}" "${OS_DEPS[@]}" > "${RPM_DIR}/install.list"
+    pkg_install_build_tool createrepo_c
+    createrepo_c -q --update "$RPM_DIR" >/dev/null || die "createrepo_c 실패"
+    ok "로컬 저장소 메타데이터 생성 (repodata/)"
+
+    PKG_COUNT="$(find "$RPM_DIR" -maxdepth 1 -name '*.rpm' | wc -l)"
 
     # 안전망: 기반 시스템 패키지가 섞이면 중단한다(타깃의 glibc/systemd 를 바꾸지 않게).
     local CORE_RE='^(glibc|glibc-common|systemd|systemd-libs|systemd-udev|dbus|dbus-libs|openssl|openssl-libs|python3|python3-libs|rpm|rpm-libs|dnf|libdnf|bash|coreutils|util-linux|kernel|kernel-core|selinux-policy|selinux-policy-targeted|libselinux|openssh|openssh-server|NetworkManager|redhat-release|rocky-release)-[0-9]'

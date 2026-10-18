@@ -61,24 +61,40 @@ CONF_DIR="${BUNDLE_ROOT}/conf"
 # nfs-common 설치 (두 역할 공통)
 #
 # 10-k8s 번들 안에 nfs-common deb 가 들어 있다. 번들을 푼 위치가 사람마다
-# 다르므로 흔한 경로를 훑는다.
+# 다르므로 흔한 경로를 훑는다. 다른 OS 용 번들(예: noble 번들이 resolute 노드에
+# 같이 있는 경우)의 deb 를 집지 않도록 이 노드의 OS 태그로 거른다.
 #=====================================================================
 ensure_nfs_common() {
     if pkg_installed "$PKG_NFS_CLIENT"; then
         ok "${PKG_NFS_CLIENT} 이미 설치됨"
         return 0
     fi
-    local pkg g sub="$PKG_BUNDLE_SUBDIR"
+    local g sub="$PKG_BUNDLE_SUBDIR" tag
     g="$(pkg_file_glob "$PKG_NFS_CLIENT")"
-    # shellcheck disable=SC2086  # glob 확장이 목적이다
-    pkg="$(ls /root/k8s-*/${sub}/${g} \
-              /root/deploy*/k8s-*/${sub}/${g} \
-              /home/*/k8s-*/${sub}/${g} \
-              /home/*/deploy*/k8s-*/${sub}/${g} \
-              "${BUNDLE_ROOT}"/${sub}/${g} 2>/dev/null | head -1)"
-    [[ -n "$pkg" ]] || die "${PKG_NFS_CLIENT} 이 없다. 10-k8s 번들의 ${sub}/${g} 를 설치할 것."
-    pkg_install_file "$pkg" || die "${PKG_NFS_CLIENT} 설치 실패"
-    ok "${PKG_NFS_CLIENT} 설치 ($(basename "$pkg"))"
+    tag="$(os_bundle_tag)"
+
+    # 후보 경로를 nullglob 배열로 펼친다.
+    # 예전에는 `ls <패턴들> | head -1` 이었는데, 패턴 하나라도 일치하지 않으면
+    # ls 가 2 를 반환하고 common.sh 의 set -e + pipefail 때문에 스크립트가
+    # **메시지 없이 exit 2 로 끝났다**(실측: 번들이 BUNDLE_ROOT 에 있어도 발생).
+    local -a cands=()
+    shopt -s nullglob
+    # shellcheck disable=SC2206  # glob 확장이 목적이다
+    cands=(
+        "${BUNDLE_ROOT}"/${sub}/${g}
+        "${BUNDLE_ROOT}"/../k8s-*-"${tag}"/${sub}/${g}     # 번들을 나란히 푼 경우
+        /root/k8s-*-"${tag}"/${sub}/${g}
+        /root/deploy*/k8s-*-"${tag}"/${sub}/${g}
+        /home/*/k8s-*-"${tag}"/${sub}/${g}
+        /home/*/*/k8s-*-"${tag}"/${sub}/${g}
+    )
+    shopt -u nullglob
+    ((${#cands[@]} > 0)) \
+        || die "${PKG_NFS_CLIENT} 이 설치돼 있지 않고 번들에서도 찾지 못했다. 10-k8s 번들(k8s-*-${tag})의 ${sub}/${g} 를 설치할 것."
+    log "${PKG_NFS_CLIENT} 설치 파일: ${cands[0]}"
+    pkg_install_file "${cands[0]}" || die "${PKG_NFS_CLIENT} 설치 실패"
+    pkg_installed "$PKG_NFS_CLIENT" || die "${PKG_NFS_CLIENT} 설치 후에도 상태가 installed 가 아니다(의존성 확인: dpkg --audit)."
+    ok "${PKG_NFS_CLIENT} 설치 ($(basename "${cands[0]}"))"
 }
 
 #=====================================================================

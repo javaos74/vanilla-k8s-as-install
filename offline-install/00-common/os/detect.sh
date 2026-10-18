@@ -75,10 +75,8 @@ os_label()             { _os_unsupported os_label; }
 # 이 호스트의 패키지 아키텍처 표기(amd64 등)를 출력한다.
 os_native_arch()       { _os_unsupported os_native_arch; }
 
-# 패키지가 상태 DB 에 있는가.
+# 패키지가 "설치 완료" 상태인가(지우고 설정 파일만 남은 상태는 거짓).
 pkg_installed()        { _os_unsupported pkg_installed; }
-# 패키지가 "설치 완료" 상태인가(설정 파일만 남은 상태는 거짓).
-pkg_status_installed() { _os_unsupported pkg_status_installed; }
 # 빌드 도구 설치(온라인 빌드 호스트, 일반 사용자 + sudo).  예) skopeo
 pkg_install_build_tool() { _os_unsupported pkg_install_build_tool; }
 # 저장소에서 설치(온라인 호스트, root).  예) NFS 서버 패키지

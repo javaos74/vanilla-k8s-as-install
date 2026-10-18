@@ -568,7 +568,7 @@ step "사전 확인"
 
 verify_manifest "$BUNDLE_ROOT"
 
-if pkg_status_installed podman-docker; then
+if pkg_installed podman-docker; then
     die "podman-docker 가 /usr/bin/docker 를 제공해 번들의 docker-ce-cli 와 충돌한다. podman 은 유지한 채 'sudo apt remove podman-docker' 후 설치를 다시 실행할 것."
 fi
 

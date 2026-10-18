@@ -275,6 +275,8 @@ v4.13.4 실측). PV 의 실제 `volumeAttributes` 는 다음과 같다.
 | `no matches for kind VolumeSnapshotClass` | CRD 등록 전에 적용했다 | `install.sh` 가 CRD 등록을 대기한다. 수동 적용 시 순서 준수 |
 | `snapshot-controller` 하나가 `Pending` | 기본 replicas 가 2다 | 빌드 시 1로 낮춘다(`21-setup-*.yaml`) |
 | PVC 는 Bound 인데 파드가 `ContainerCreating` 에서 멈춤 | 노드에 `nfs-common` 없음 | `install.sh` 가 10-k8s 번들의 deb 로 설치한다 |
+| `nfs-common 이미 설치됨` 인데 `/sbin/mount.nfs4` 가 없다 | (고쳤다) 예전 판정이 `dpkg -s` 라 지우고 설정 파일만 남은 `rc` 상태를 설치로 봤다 | 지금은 `installed` 상태만 인정하고 다시 설치한다. `dpkg -l nfs-common` 이 `rc` 인지 확인 |
+| `install.sh` 가 nfs-common 단계에서 메시지 없이 exit 2 | (고쳤다) 번들 경로를 `ls <패턴들> \| head` 로 찾다가 패턴 하나라도 비면 `set -e` + `pipefail` 로 종료했다 | 지금은 nullglob 으로 찾고, 못 찾으면 이유를 출력한다. 10-k8s 번들은 이 번들 옆(`../k8s-*-<코드네임>`)이나 `/root`, `/home/*`, `/home/*/*` 아래에 둘 것 |
 | `Released` 상태 PV 누적 | `nfs-csi-retain` 사용분 | PVC 삭제 후에도 PV 와 `/data/nfs` 하위 디렉터리가 남는다. 주기적 정리 필요 |
 | 파드 I/O 무한 대기 | NFS 서버 정지 + `hard` 마운트 | 서버를 먼저 살린다. 중지/시작 순서는 서버가 나중에 죽고 먼저 살아야 한다 |
 | `적재되지 않은 이미지: ...` 인데 `ctr images ls` 에는 보인다 | `ctr images ls -q \| grep -q` 형태의 오탐. grep 이 첫 일치에서 끝나면서 ctr 이 SIGPIPE(141)로 죽고 `pipefail` 이 실패로 판정한다 | 고쳤다. `common.sh` 의 `ctr_missing_images()` 를 쓴다. 목록 앞쪽 이미지에서만 간헐 발생해 놓치기 쉽다 |

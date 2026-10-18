@@ -36,12 +36,13 @@ os_label() {
 os_native_arch() { dpkg --print-architecture; }
 
 #--- 패키지 -------------------------------------------------------------
-# dpkg -s 는 "설정 파일만 남은(rc)" 상태에서도 0 을 반환한다. 분리 전
-# 스크립트들의 판정이 이 의미였으므로 그대로 둔다. 엄격한 판정은
-# pkg_status_installed 를 쓴다.
-pkg_installed() { dpkg -s "$1" >/dev/null 2>&1; }
-
-pkg_status_installed() {
+# "설치 완료(installed)" 상태만 참이다.
+#
+# 예전에는 dpkg -s 를 썼는데, dpkg -s 는 패키지를 지우고 설정 파일만 남은
+# 상태(config-files, dpkg -l 의 rc)에서도 0 을 반환한다. 그래서 nfs-common 을
+# dpkg -r 한 노드에서 "이미 설치됨" 으로 보고 설치를 건너뛰었고 mount.nfs4 가
+# 없는 채로 진행됐다(실측, Ubuntu Server 26.04).
+pkg_installed() {
     [[ "$(dpkg-query -W -f='${db:Status-Status}' "$1" 2>/dev/null || true)" == "installed" ]]
 }
 
@@ -67,7 +68,7 @@ pkg_install_bundle_dir() {
     }
 }
 
-pkg_install_file() { dpkg -i "$1" >/dev/null; }
+pkg_install_file() { DEBIAN_FRONTEND=noninteractive dpkg -i "$1" >/dev/null; }
 
 pkg_hold() { apt-mark hold "$@" >/dev/null; }
 

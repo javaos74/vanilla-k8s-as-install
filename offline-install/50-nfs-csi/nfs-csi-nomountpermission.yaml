@@ -1,0 +1,59 @@
+# =====================================================================
+# NFS CSI StorageClass (mountPermissions 제거 권고 샘플)
+#
+# [권고 사유]
+# 1. 보안 감사(Compliance) 및 최소 권한 원칙:
+#    mountPermissions: "0777" 지정 시 모든 사용자/컨테이너에 Full Access(rwxrwxrwx)가
+#    강제 부여되어 보안 규정 및 감사 정책에 저촉됩니다.
+# 2. 특정 워크로드/DBMS 기동 실패 방지:
+#    PostgreSQL, MariaDB, Elasticsearch 등 데이터 디렉터리 권한을 검증하는 워크로드는
+#    디렉터리가 0777(World-writable)일 경우 보안 에러(data directory has wrong ownership/permissions)로
+#    인해 파드가 CrashLoopBackOff에 빠집니다.
+# 3. K8s Native 권한 제어:
+#    mountPermissions 파라미터를 제거(생략)하면 csi-driver-nfs가 볼륨 마운트 시 강제 chmod 호출을
+#    생략하며, Pod의 securityContext (runAsUser, fsGroup, fsGroupChangePolicy) 및 NFS 서버 export
+#    권한을 그대로 따릅니다.
+#
+# [적용 방법]
+# StorageClass는 parameters 및 mountOptions가 불변(Immutable) 객체이므로 기존 SC 삭제 후 재생성합니다.
+#   kubectl delete sc nfs-csi nfs-csi-retain --ignore-not-found
+#   kubectl apply -f nfs-csi-nomountpermission.yaml
+# =====================================================================
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-csi
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: 10.32.99.4      # site.env의 NFS_SERVER_HOST 값과 일치하도록 설정
+  share: /data/nfs        # site.env의 NFS_EXPORT_PATH 값과 일치하도록 설정
+  # mountPermissions 제거됨 (권고: chmod 호출 생략 및 Pod securityContext 위임)
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+mountOptions:
+  - nfsvers=4.1
+  - hard
+  - timeo=600
+  - retrans=2
+---
+# 필요 시 Retain 정책을 적용한 StorageClass
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-csi-retain
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: 10.32.99.4      # site.env의 NFS_SERVER_HOST 값과 일치하도록 설정
+  share: /data/nfs        # site.env의 NFS_EXPORT_PATH 값과 일치하도록 설정
+  # mountPermissions 제거됨
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+mountOptions:
+  - nfsvers=4.1
+  - hard
+  - timeo=600
+  - retrans=2

@@ -166,14 +166,91 @@ Cilium 과 마찬가지로 **목록을 손으로 관리하지 않는다.** 실�
 | `nfs-csi` | Delete | **기본 클래스** |
 | `nfs-csi-retain` | Retain | PVC 삭제 후에도 데이터 보존 |
 
-공통 파라미터는 `server: NFS_SERVER_HOST`, `share: NFS_EXPORT_PATH`, `mountPermissions: "0777"` 이고
+공통 파라미터는 `server: NFS_SERVER_HOST`, `share: NFS_EXPORT_PATH` 이며,
 `mountOptions` 는 `nfsvers=4.1, hard, timeo=600, retrans=2` 다.
 
 `allowVolumeExpansion: true` 로 두었지만 **NFS 는 실제 용량 쿼터를 적용하지 않는다.**
 PVC 의 용량 값은 사실상 라벨이다. 1Gi 를 요청해도 서버 디스크 전체를 쓸 수 있다.
 
-`mountPermissions: "0777"` 은 권한이 넓다. 워크로드의 `fsGroup` 이 정해지면 `0770` 등으로
-좁히는 것을 권한다.
+---
+
+### 5.1 `mountPermissions` 제거 권고 (중요)
+
+초기 번들 생성 시 편의를 위해 `mountPermissions: "0777"`을 넣을 수 있으나, **운영 환경 및 엔터프라이즈 환경에서는 `mountPermissions` 파라미터를 아예 제거(omitted)하는 구성을 강력히 권고**한다.
+
+#### 제거 권고 사유
+
+1. **보안 감사 및 최소 권한 원칙 (Least Privilege) 준수**:
+   - `mountPermissions: "0777"`이 설정되면 마운트되는 모든 하위 디렉터리에 `rwxrwxrwx` 전역 권한이 강제 부여되어 보안 감사(Security Compliance)에 저촉된다.
+2. **DBMS 및 특정 워크로드 기동 실패 방지**:
+   - PostgreSQL, MariaDB, Elasticsearch 등 데이터 무결성과 권한을 엄격하게 검증하는 워크로드는 데이터 디렉터리 권한이 0777(World-writable)인 경우 보안 에러(`data directory has wrong ownership/permissions`)를 발생시키며 Pod가 `CrashLoopBackOff`로 기동에 실패한다.
+3. **불필요한 강제 `chmod` 생략 및 K8s Native 권한 제어**:
+   - `csi-driver-nfs`는 `mountPermissions` 파라미터가 명시되면 볼륨이 마운트될 때마다 해당 경로에 대해 무조건 `chmod <mountPermissions>`를 실행한다.
+   - `mountPermissions`를 지정하지 않으면(제거하면), 드라이버의 기본 동작(미지정 시 chmod 생략)에 따라 강제 `chmod` 호출을 건너뛴다.
+   - 볼륨의 권한 관리는 NFS 서버의 디렉터리 권한 정책 및 Kubernetes 파드의 `securityContext` (`runAsUser`, `fsGroup`, `fsGroupChangePolicy`)를 통해 안전하고 표준적인 방식으로 위임·제어할 수 있다.
+
+---
+
+### 5.2 권장 StorageClass 샘플 (`nfs-csi-nomountpermission.yaml`)
+
+`mountPermissions`를 제거한 권장 StorageClass 매니페스트 샘플은 [`nfs-csi-nomountpermission.yaml`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/50-nfs-csi/nfs-csi-nomountpermission.yaml)로 제공된다.
+
+> [!WARNING]
+> StorageClass의 `parameters`와 `mountOptions`는 생성 후 수정할 수 없는 **불변(Immutable)** 필드다.
+> 기존에 배포된 StorageClass에 `mountPermissions`가 포함되어 있다면, 기존 StorageClass를 삭제한 후 재생성해야 한다.
+
+#### 교체 적용 방법
+```bash
+# 1. 기존 StorageClass 삭제 (PV/PVC 데이터는 삭제되지 않음)
+kubectl delete sc nfs-csi nfs-csi-retain --ignore-not-found
+
+# 2. mountPermissions 가 제거된 StorageClass 배포
+kubectl apply -f nfs-csi-nomountpermission.yaml
+
+# 3. 배포 확인
+kubectl get sc
+```
+
+#### 샘플 매니페스트 내용
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-csi
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: 10.32.99.4      # site.env의 NFS_SERVER_HOST IP에 맞게 수정
+  share: /data/nfs        # site.env의 NFS_EXPORT_PATH 경로에 맞게 수정
+  # [권고] mountPermissions 제거 (chmod 호출 생략, pod securityContext/NFS 기본 권한 준수)
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+mountOptions:
+  - nfsvers=4.1
+  - hard
+  - timeo=600
+  - retrans=2
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-csi-retain
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: 10.32.99.4      # site.env의 NFS_SERVER_HOST IP에 맞게 수정
+  share: /data/nfs        # site.env의 NFS_EXPORT_PATH 경로에 맞게 수정
+  # mountPermissions 제거됨
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+mountOptions:
+  - nfsvers=4.1
+  - hard
+  - timeo=600
+  - retrans=2
+```
 
 ---
 

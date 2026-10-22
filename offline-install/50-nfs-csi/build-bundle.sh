@@ -245,6 +245,7 @@ cp -R "${SCRIPT_DIR}/../00-common/os"        "${BUNDLE_DIR}/00-common/"
 cp "${SCRIPT_DIR}/install.sh"                "${BUNDLE_DIR}/"
 cp "${SCRIPT_DIR}/setup-nfs-server.sh"       "${BUNDLE_DIR}/"
 cp "${SCRIPT_DIR}/README.md"                 "${BUNDLE_DIR}/" 2>/dev/null || true
+cp "${SCRIPT_DIR}/nfs-csi-nomountpermission.yaml" "${BUNDLE_DIR}/" 2>/dev/null || true
 chmod +x "${BUNDLE_DIR}/install.sh" "${BUNDLE_DIR}/setup-nfs-server.sh"
 
 cat > "${BUNDLE_DIR}/BUNDLE-INFO" <<EOF

@@ -207,7 +207,7 @@ CP는 EIP 덕분에 주소가 그대로이므로 맥의 kubeconfig를 손댈 필
 - **SQL Server `sa` 비밀번호 불명.** 계정 자체는 정상(오류 코드 `18456 State 8` = 비밀번호 불일치, 즉 존재+활성). AMI가 EULA만 수락한 상태로 빌드되어 비밀번호가 디스크에 없음 — `/var/opt/mssql/secrets/`에는 `machine-key`뿐, cloud-init user-data / bash history / systemd 환경변수 모두 비어 있음. 재설정: `sudo systemctl stop mssql-server && sudo /opt/mssql/bin/mssql-conf set-sa-password`
 - **단일 컨트롤 플레인.** HA 아님. etcd도 단일 멤버 → 스냅샷 백업이 유일한 복구 수단
 - **NFS 서버 단일 장애점.** infra-01가 죽으면 모든 PV가 멈춤. `Scheduled-for-Deletion: 2026-09-06` 태그가 여전히 붙어 있음 — 계속 사용하려면 정리 필요
-- `mountPermissions: "0777"`은 권한이 넓다. 워크로드의 `fsGroup`이 정해지면 `0770` 등으로 축소 권장
+- **StorageClass `mountPermissions` 제거 권고**: `mountPermissions: "0777"`은 권한이 과도하게 넓고, PostgreSQL 등 권한 검증을 거치는 DB 파드의 기동 실패(`wrong permissions` 에러) 원인이 될 수 있습니다. 운영 환경에서는 StorageClass parameters에서 `mountPermissions`를 제거(생략)하여 드라이버의 강제 chmod를 끄고 Pod `securityContext`(`fsGroup`)에 위임하는 것을 권장합니다. (샘플: [`offline-install/50-nfs-csi/nfs-csi-nomountpermission.yaml`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/50-nfs-csi/nfs-csi-nomountpermission.yaml))
 - `Released` 상태 PV가 누적된다 (prereq의 `nfs-csi-retain` 사용분). PVC 삭제 후에도 PV와 `/data/nfs` 하위 디렉터리가 남음
 - `*.k8s.myrobots.co.kr` 하위 이름을 나중에 클러스터 내부 Service로 옮기면, `template`이 `kubernetes` 플러그인보다 먼저 실행되어 계속 <NFS_PRIVATE_IP>으로 간다. 예외 처리 필요
 - **비용**: 중지 중에도 EBS 총 1,162GB 과금. EIP는 인스턴스 중지 중에만 시간당 과금(실행 중엔 무료)

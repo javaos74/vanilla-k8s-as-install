@@ -308,6 +308,14 @@ kubectl get storageclass
 > [!TIP]
 > `install.sh` 실행 시 자체적으로 임시 PVC/Pod를 생성하여 실제 볼륨 마운트 및 읽기/쓰기 테스트를 수행하고 자동 삭제합니다.
 
+> [!IMPORTANT]
+> **운영 환경 StorageClass `mountPermissions` 제거 권고**:
+> `parameters.mountPermissions`가 `"0777"` 등으로 설정되어 있으면 CSI 드라이버가 마운트 시 강제로 `chmod`를 실행합니다. 이는 엔터프라이즈 보안 감사 지적 사항이 될 수 있으며, 데이터 디렉터리 권한을 엄격히 검증하는 워크로드(PostgreSQL, MariaDB, Elasticsearch 등)의 기동 실패(`wrong ownership/permissions` 에러)를 유발합니다.
+> 운영 환경에서는 `mountPermissions`를 제거(생략)하고 파드의 `securityContext`(`fsGroup`)나 NFS 서버 권한에 위임하는 것을 강력히 권장합니다.
+> - **권장 샘플 매니페스트**: [`50-nfs-csi/nfs-csi-nomountpermission.yaml`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/50-nfs-csi/nfs-csi-nomountpermission.yaml)
+> - **적용 방법**: `kubectl delete sc nfs-csi nfs-csi-retain && kubectl apply -f 50-nfs-csi/nfs-csi-nomountpermission.yaml`
+
+
 ---
 
 ### 4.3 S3 호환 Object Storage 구성 (MinIO, [`20-minio`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/20-minio/README.md))

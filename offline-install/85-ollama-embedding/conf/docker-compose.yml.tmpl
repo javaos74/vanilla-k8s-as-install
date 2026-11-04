@@ -1,0 +1,61 @@
+# 85-ollama-embedding : install.sh 가 __PLACEHOLDER__ 를 치환해
+# /opt/ollama-embedding/docker-compose.yml 로 설치한다.
+#
+#   클라이언트 -> nginx(:80, Bearer 키 검사) -> ollama(:11434, internal 네트워크)
+name: ollama-embedding
+
+services:
+  ollama:
+    image: __OLLAMA_IMAGE__
+    container_name: ollama-embedding
+    # 이미지는 번들 tar 로만 적재한다. 없으면 받지 않고 실패한다.
+    pull_policy: never
+    restart: unless-stopped
+    # GPU 번들이면 install.sh 가 아래 줄을 `gpus: all` 로 바꾸고, CPU 번들이면 지운다.
+    __OLLAMA_GPUS__
+    # ports 없음: 11434 를 호스트에 열면 nginx 의 키 검사를 우회할 수 있다.
+    # volumes 없음: /root/.ollama 에 마운트하면 이미지에 넣은 모델이 가려진다.
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "/bin/ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  nginx:
+    image: __NGINX_IMAGE__
+    container_name: ollama-embedding-nginx
+    pull_policy: never
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    ports:
+      - "__OLLAMA_EMBED_PORT__:80"
+    volumes:
+      - __INSTALL_DIR__/nginx/conf.d:/etc/nginx/conf.d:ro
+      # 파일이 아니라 디렉터리를 마운트한다. 단일 파일 bind mount 는 install.sh 가
+      # 키 파일을 새로 쓰면(mv) 옛 inode 를 계속 보여 주어 키 교체가 반영되지 않는다.
+      - __INSTALL_DIR__/nginx/secrets:/etc/nginx/secrets:ro
+    networks:
+      - frontend
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+networks:
+  frontend: {}
+  # 외부로 나가는 경로가 없는 네트워크. ollama 는 여기에만 붙으므로
+  # 실행 중에 모델이나 이미지를 인터넷에서 받을 수 없다.
+  backend:
+    internal: true

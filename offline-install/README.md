@@ -67,6 +67,7 @@ flowchart TD
 | **L4 Load Balancer** | HAProxy **3.1** | Docker (`--network host`) | 80/443/15021 TCP 패스스루 |
 | **Database** | SQL Server 2022 (CU25/CU26) / PostgreSQL 16 | Docker 커스텀 이미지 / Docker Compose | MSSQL은 **Full-Text Search(FTS)** 내장 필수, PG는 TLS 적용 |
 | **Cache** | Redis OSS **7.4** | Docker Compose | TLS 활성화, 단일 노드 |
+| **Embedding (선택)** | Ollama **0.40.13** + qwen3-embedding 8b (CPU Q4_K_M / GPU Q8_0), nginx **1.30.6** | Docker Compose (`85-ollama-embedding`, 단독 VM) | Bearer 키 1개 검사, OpenAI 호환 `/v1/embeddings` |
 | **Automation Suite** | **v2.2510.4** | `uipathctl` 배포 | ArgoCD 기반 라이프사이클 관리 |
 
 ---
@@ -392,6 +393,17 @@ sudo ./install.sh --check-only     # Deployment·APIService·kubectl top·imageI
 | **SQL Server** | [`70-mssql`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/70-mssql/README.md) | **Full-Text Search(FTS)**가 내장된 커스텀 이미지(`mssql-fts:2022`) 필수 실행. 공식 MS 이미지에는 FTS가 없어 AS 설치 실패. 포트 1433. |
 | **PostgreSQL** | [`80-postgresql`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/80-postgresql/README.md) | PostgreSQL 16 컨테이너, TLS 적용, 포트 5432 (Data Service 등 요구 시). |
 | **Redis Cache** | [`45-redis`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/45-redis/README.md) | Redis OSS 단일 노드 (TLS 리스너, 포트 6379, 데이터 디렉터리 `/data/redis`). |
+
+### 4.6 (선택) 임베딩 서비스 ([`85-ollama-embedding`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/85-ollama-embedding/README.md))
+Ollama 로 `qwen3-embedding` 8b 를 서빙하고 앞단 nginx 가 `Authorization: Bearer <키>` 를 검사합니다. 모델은 이미지 안에 들어 있어 에어갭 VM 에서 번들의 이미지 tar 만으로 설치됩니다.
+CPU 번들(Q4_K_M)과 GPU 번들(Q8_0)을 따로 만들고, 하드웨어에 맞는 번들 하나만 옮깁니다. 단독 VM 의 Docker Compose 로 실행하며 AS 설치와 무관합니다.
+```bash
+# 빌드 호스트(Linux x86_64 + Docker, 인터넷 O)
+cd offline-install/85-ollama-embedding && ./build-bundle.sh        # cpu | gpu | all(기본)
+# 에어갭 VM
+tar xzf ollama-embedding-cpu-0.40.13.tar.gz && cd ollama-embedding-cpu-0.40.13
+sudo ./install.sh                                                 # 키 자동 생성, 401/임베딩 판정
+```
 
 ---
 

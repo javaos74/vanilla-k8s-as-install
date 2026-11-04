@@ -76,6 +76,18 @@ deb_url() {   # $1=codename  $2=deb 파일명
     echo "${DOCKER_REPO}/dists/$1/pool/stable/${BUNDLE_ARCH}/$2"
 }
 
+#--- Ollama 모델 매니페스트 --------------------------------------------
+# registry.ollama.ai 의 매니페스트 본문 sha256 이 핀과 같은지 본다($1=모델:태그 $2=sha256:...).
+# 존재 여부만 보면 태그가 다른 가중치로 재지정된 것을 못 잡는다.
+ollama_manifest_ok() {
+    local name="${1%%:*}" tag="${1#*:}" sum
+    sum="$(curl -fsSL --max-time 25 \
+        -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+        "https://registry.ollama.ai/v2/library/${name}/manifests/${tag}" 2>/dev/null \
+        | sha256sum | cut -d' ' -f1)" || return 1
+    [[ "sha256:${sum}" == "$2" ]]
+}
+
 step "Kubernetes deb 패키지 (${K8S_APT_REPO})"
 for pkg in kubeadm kubelet kubectl; do
     check "${pkg} ${K8S_PKG_VERSION}" apt_pkg_ok "${K8S_APT_REPO}/Packages" "$pkg" "$K8S_PKG_VERSION"
@@ -139,5 +151,16 @@ check "metrics-server 이미지 (${METRICS_SERVER_SOURCE_IMAGE##*:})" \
 
 step "HAProxy"
 check "haproxy 이미지 ${HAPROXY_IMAGE}" image_ok "$HAPROXY_IMAGE"
+
+step "Ollama 임베딩 (85-ollama-embedding)"
+# 태그가 아니라 빌드가 실제로 쓰는 다이제스트 참조를 확인한다.
+check "ollama 베이스 이미지 (${OLLAMA_VERSION})" \
+    image_ok "${OLLAMA_BASE_IMAGE%:*}@${OLLAMA_BASE_DIGEST}"
+check "nginx 이미지 (${OLLAMA_EMBED_NGINX_IMAGE##*:})" \
+    image_ok "${OLLAMA_EMBED_NGINX_IMAGE%:*}@${OLLAMA_EMBED_NGINX_DIGEST}"
+check "CPU 모델 ${OLLAMA_EMBED_CPU_MODEL} 매니페스트 = 핀" \
+    ollama_manifest_ok "$OLLAMA_EMBED_CPU_MODEL" "$OLLAMA_EMBED_CPU_MODEL_DIGEST"
+check "GPU 모델 ${OLLAMA_EMBED_GPU_MODEL} 매니페스트 = 핀" \
+    ollama_manifest_ok "$OLLAMA_EMBED_GPU_MODEL" "$OLLAMA_EMBED_GPU_MODEL_DIGEST"
 
 check_summary

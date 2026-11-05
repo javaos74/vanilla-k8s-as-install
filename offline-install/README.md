@@ -598,6 +598,7 @@ sudo ./90-verify/airgap-off.sh
 | **Harbor 재부팅 후 443 접속 불가 (`Connection refused`)** | Docker 데몬이 컨테이너 순서(`harbor-log`의 1514 포트 리스너 준비)를 기다리지 않고 동시 기동함 | `sudo systemctl restart harbor.service` 실행 ([`30-harbor/conf/harbor-start.sh`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/30-harbor/conf/harbor-start.sh) 순차 기동 보장) |
 | **MSSQL 사전 점검 실패 (`Full-Text Search not installed`)** | MS 공식 mssql 이미지를 사용하여 FTS 서비스가 누락됨 | [`70-mssql/fts-image`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/70-mssql/fts-image)에서 빌드된 `mssql-fts:2022` 이미지로 교체 |
 | **`kubectl top nodes` 메트릭 수집 불가** | Metrics Server의 kubelet serving 인증서 검증 실패 | [`metrics-server/components.yaml`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/metrics-server/components.yaml)에 `--kubelet-insecure-tls` 및 `--kubelet-preferred-address-types=InternalIP` 플래그 추가 |
+| **AS 설치 후 또는 maintenance 해제 뒤 특정 노드의 pod 다수가 `CrashLoopBackOff`** (죽는 컨테이너는 `istio-proxy`, 로그에 `inotify_fd_ >= 0` / `couldn't initialize inotify: too many open files`) | 노드의 `fs.inotify.max_user_instances`가 기본값 128이라 istio-proxy(uid 1337)가 한도를 다 씀. Redis 인증서 오류처럼 보일 수 있지만 무관함 | 모든 노드에 `fs.inotify.max_user_instances=8192`, `fs.inotify.max_user_watches=1048576`을 적용(`/etc/sysctl.d/99-inotify.conf`)한 뒤 크래시 pod 삭제. 상세: [`10-k8s/README.md` §7.1](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/10-k8s/README.md), Redis 점검 절차: [`45-redis/README.md`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/45-redis/README.md) |
 
 ---
 

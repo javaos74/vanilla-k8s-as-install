@@ -47,3 +47,55 @@ sudo ./install.sh --uninstall
 `--uninstall`은 컨테이너만 제거하며 `/opt/redis` 설정·인증서와 `REDIS_DATA_DIR`은 보존한다. 비밀번호는 `/opt/redis/redis.conf`의 `requirepass` 항목에 저장되고 파일 권한은 `0600`이다. 생성된 값을 안전한 보관소에 옮겨두고, 방화벽에서는 설정한 Redis 포트를 필요한 내부 클라이언트에만 허용한다.
 
 TLS URI 형식은 `rediss://:<password>@<REDIS_HOSTNAME>:<REDIS_PORT>`이며, 앱이 CA 검증을 수행한다면 설치에서 사용한 CA 인증서를 신뢰하도록 설정한다.
+
+## 트러블슈팅 — "Redis 인증서 오류"가 의심될 때
+
+AS 서비스가 기동하지 못하면 Redis TLS 문제로 보이기 쉽다. 하지만 2026-11-04 사례에서 실제 원인은 노드의 inotify 한도였다([`10-k8s/README.md` §7.1](../10-k8s/README.md#71-inotify-한도-초과로-istio-proxy-가-crashloopbackoff)). **Redis 쪽부터 아래 순서로 검증하고, 모두 정상이면 클러스터 쪽을 본다.**
+
+### 1. 서버 인증서 · 키 · 체인 (Redis 호스트)
+
+```bash
+D=/opt/redis/certs
+# SAN 에 AS 연결 문자열의 호스트(IP 또는 DNS)가 있어야 한다
+sudo openssl x509 -in $D/server.crt -noout -subject -issuer -dates -ext subjectAltName,extendedKeyUsage
+# 키 쌍 일치: 두 해시가 같아야 한다
+sudo openssl x509 -in $D/server.crt -noout -modulus | md5sum
+sudo openssl rsa  -in $D/server.key -noout -modulus | md5sum
+# 체인: "OK"
+sudo openssl verify -CAfile $D/ca.crt $D/server.crt
+```
+
+### 2. 실제 핸드셰이크
+
+연결 문자열이 IP라면 `-verify_ip`를, DNS 이름이라면 `-verify_hostname`을 쓴다. IP에 `-verify_hostname`을 쓰면 SAN에 IP가 있어도 `hostname mismatch`(62)가 나온다. 이건 점검 방법이 틀린 것이지 인증서 문제가 아니다.
+
+```bash
+sudo install -m 644 /opt/redis/certs/ca.crt /tmp/redis-ca.crt
+echo | openssl s_client -connect <REDIS_HOST_IP>:6379 -verify_ip <REDIS_HOST_IP> -CAfile /tmp/redis-ca.crt 2>&1 | grep "Verify return"
+# 기대값: Verify return code: 0 (ok)
+sudo rm -f /tmp/redis-ca.crt
+```
+
+`-CAfile` 없이 실행하면 `21 (unable to verify the first certificate)`가 나온다. 사설 CA이므로 정상이다.
+
+### 3. AS 연결 문자열과 CA 신뢰 (클러스터)
+
+```bash
+# 호스트·ssl 확인 (비밀번호 출력 주의)
+kubectl -n uipath get secret redb-redis-cluster-db -o jsonpath='{.data.host_with_port}' | base64 -d; echo
+# additional-ca-certificates 에 Redis CA 가 들어 있고 지문이 서버의 ca.crt 와 같은지 확인
+kubectl -n uipath get secret additional-ca-certificates -o jsonpath='{.data.additionalca\.crt}' | base64 -d \
+  | awk '/BEGIN CERT/{n++; f="/tmp/addca-" n ".pem"} n{print > f}'
+for f in /tmp/addca-*.pem; do openssl x509 -in $f -noout -subject -fingerprint -sha256; done; rm -f /tmp/addca-*.pem
+sudo openssl x509 -in /opt/redis/certs/ca.crt -noout -fingerprint -sha256   # Redis 호스트에서
+```
+
+### 4. 서버 로그
+
+```bash
+sudo docker logs <redis 컨테이너> 2>&1 | grep -E "Error accepting|SSL"
+```
+
+클라이언트가 인증서를 거부하고 있다면 `SSL routines::...` 오류가 연결 시도마다 반복해서 찍힌다. 포트를 특정 IP에 바인딩한 경우 출발지는 docker-proxy 게이트웨이(`172.18.0.1` 등)로만 보인다. 그래서 어느 pod가 연결했는지는 로그로 구분할 수 없다. 오류가 몇 건뿐이라면 인증서 문제로 보기 어렵다.
+
+1~4가 모두 정상이면 Redis는 원인이 아니다. 실패하는 pod에서 **어느 컨테이너가 죽는지**(`kubectl describe pod`)부터 확인한다.

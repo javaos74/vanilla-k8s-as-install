@@ -924,6 +924,7 @@ DNS 차단으로 인한 소음이 거슬리면 `--allow-dns` 를 쓴다. 이름�
 | `apt-get` exit 100 (dpkg lock) | `unattended-upgrades` 와 경쟁 | 스크립트가 `DPkg::Lock::Timeout=900` 을 준다 |
 | (RHEL) CoreDNS 만 `Pending`/`CrashLoop`, 나머지 Running | firewalld 가 파드 → 노드 IP:6443 을 막는다 | `install.sh` 가 포트를 열고 파드 대역을 trusted 존에 넣는다(`os/rhel.sh`). `firewall-cmd --zone=trusted --list-sources` 확인 |
 | (RHEL) `sudo` 안에서 `helm`/`podman: command not found` | RHEL 의 sudo `secure_path` 에 `/usr/local/bin` 이 없다 | `os/rhel.sh` 가 PATH 앞에 붙인다. 수동 실행 시 `sudo env PATH=$PATH ...` |
+| AS 설치 후 또는 maintenance 해제 뒤 한 노드의 pod 들이 일제히 `CrashLoopBackOff`. 죽는 컨테이너는 `istio-proxy` 이고, 로그에 `inotify_fd_ >= 0` 또는 `couldn't initialize inotify: too many open files` 가 있다 | 노드의 `fs.inotify.max_user_instances` 가 기본값 128 이다. istio-proxy(uid 1337)가 pod 마다 inotify 인스턴스를 만들어 한도를 다 쓴다 | 아래 7.1절 |
 
 ### 이전 스크립트로 설치한 노드의 `/usr` · `/etc` 소유자 복구
 
@@ -974,6 +975,67 @@ sudo ./install.sh
 설치한다. Kubernetes CRI 런타임은 Docker가 아니라 `containerd`다. `apt-get -f install`
 만 따로 실행하지 말 것. 오프라인 상태에서 의존성 복구를 시도하면 `docker-ce` 가
 제거될 수 있다.
+
+### 7.1 inotify 한도 초과로 istio-proxy 가 CrashLoopBackOff
+
+2026-11-04 `as2510-vanilla` 클러스터에서 maintenance 모드를 해제했을 때 실제로 발생했다. 처음에는 Redis 인증서 문제로 의심했지만 Redis 는 정상이었다([`45-redis/README.md`](../45-redis/README.md) 트러블슈팅 참고).
+
+**증상**
+
+- 한 노드(이번 사례는 `ascp`)에 있는 pod 13개가 `CrashLoopBackOff` 였다. portal, organization-management, license-accountant, webhook-service, testmanager, robotube, intsvcs-ezra 등이다. 다른 노드의 pod 는 정상이었다.
+- `kubectl describe pod` 를 보면 죽는 컨테이너는 앱이 아니라 `istio-proxy` 다. 이벤트에는 `FailedPostStartHook`, `Startup probe failed: ... :15020 ... connection refused` 가 찍힌다.
+- 앱 로그에 보이는 `LedgerException: Ledger subscriber could not be started` 같은 오류는 2차 증상이다. 사이드카가 없어서 네트워크가 안 되기 때문이다.
+
+**진단**
+
+```bash
+# 1) 크래시 pod 가 한 노드에 몰려 있는지
+kubectl -n uipath get pods -o jsonpath='{range .items[*]}{.spec.nodeName}{" "}{.status.containerStatuses[*].state.waiting.reason}{"\n"}{end}' \
+  | grep CrashLoopBackOff | awk '{print $1}' | sort | uniq -c
+
+# 2) istio-proxy 이전 로그에서 inotify 오류 확인 (envoy 덤프에 바이너리가 섞여 tr 로 걸러낸다)
+kubectl -n uipath logs <pod> -c istio-proxy --previous \
+  | LC_ALL=C tr -cd '\11\12\15\40-\176' | grep -iE "inotify|too many open files"
+#   critical envoy assert ... inotify_fd_ >= 0. Details: Consider increasing value of
+#     fs.inotify.max_user_watches and/or fs.inotify.max_user_instances via sysctl
+#   failed to start default Istio SDS server: ... couldn't initialize inotify: too many open files
+
+# 3) 해당 노드에서 한도와 UID 별 사용량 비교
+sysctl fs.inotify.max_user_instances fs.inotify.max_user_watches
+sudo find /proc/*/fd -lname 'anon_inode:inotify' 2>/dev/null | cut -d/ -f3 \
+  | xargs -I{} stat -c %u /proc/{} 2>/dev/null | sort | uniq -c | sort -rn | head
+```
+
+실측값은 `max_user_instances = 128` 이었고, 사용량은 uid 0 이 **128/128**, uid 1337(istio-proxy)이 **125/128** 이었다. `max_user_instances` 는 UID 단위 한도다. 그래서 1337 이 한도에 닿으면 새로 뜨는 모든 사이드카가 SDS 파일 감시를 만들지 못하고 abort 된다. maintenance 해제처럼 pod 가 한꺼번에 재생성될 때 터지기 쉽다.
+
+**조치** (클러스터의 **모든 노드**에서 실행. 문제가 안 난 노드도 기본값은 같다)
+
+```bash
+# 즉시 적용
+sudo sysctl -w fs.inotify.max_user_instances=8192
+sudo sysctl -w fs.inotify.max_user_watches=1048576
+
+# 재부팅 후에도 유지
+sudo tee /etc/sysctl.d/99-inotify.conf >/dev/null <<'EOF'
+fs.inotify.max_user_instances = 8192
+fs.inotify.max_user_watches   = 1048576
+EOF
+sudo sysctl --system | grep inotify   # 다른 sysctl.d 파일이 덮어쓰지 않는지 확인
+
+# 크래시 중인 pod 재생성 (CrashLoopBackOff 대기 시간을 기다리지 않으려면)
+kubectl -n uipath get pods --no-headers | awk '/CrashLoopBackOff/{print $1}' | xargs -r kubectl -n uipath delete pod
+```
+
+8192 / 1048576 은 여유를 크게 잡은 일반적인 값이다. UiPath 공식 권장값으로 검증한 것은 아니다. `max_user_watches` 는 감시 대상당 커널 메모리를 조금 쓰는데, 실제로 할당되는 것은 사용한 만큼뿐이다.
+
+**확인**
+
+```bash
+kubectl -n uipath get pods --no-headers | grep -E "CrashLoopBackOff|PostStartHook" || echo "크래시 pod 없음"
+kubectl -n uipath get events --field-selector type=Warning | grep -c FailedPostStartHook   # 새로 늘지 않아야 한다
+```
+
+**재발 방지:** 현재 `build-bundle.sh` 가 만드는 `k8s-sysctl.conf` 에는 inotify 항목이 없다. 새로 구축할 때는 `10-k8s/install.sh` 직후, AS 설치 전에 위 `99-inotify.conf` 를 모든 노드에 넣어 둔다.
 
 ### 로그 위치
 

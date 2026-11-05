@@ -43,7 +43,8 @@ k8s-1.36.4-<codename>/
 ├── images/               이미지 7개 (docker-archive tar)
 ├── bin/                  helm, podman-static(+서명)
 └── conf/                 kubeadm-init.yaml, kubeadm-join.yaml, images.list,
-                          pause-image, k8s-modules.conf, k8s-sysctl.conf
+                          pause-image, k8s-modules.conf, k8s-sysctl.conf,
+                          k8s-inotify.conf
 ```
 
 ### 버전
@@ -773,7 +774,7 @@ sudo ./install.sh --help         # 사용법
 ### 설치 단계
 
 1. 번들 무결성 검증, 에어갭 여부 확인
-2. 커널 모듈(`overlay`, `br_netfilter`), sysctl, swap 비활성(+fstab 주석)
+2. 커널 모듈(`overlay`, `br_netfilter`), sysctl(kubeadm 필수 항목 `99-k8s.conf` + inotify 한도 `99-inotify.conf`, 7.1절), swap 비활성(+fstab 주석)
 3. deb 설치(26.04 기준 37개) → `kubelet/kubeadm/kubectl/containerd.io` **apt-mark hold**
 4. containerd 설정 (아래 4.1)
 5. 이미지 7개를 **`k8s.io` 네임스페이스로** 적재 후 목록 대조
@@ -781,7 +782,7 @@ sudo ./install.sh --help         # 사용법
 7. **control plane**: `kubeadm init --config conf/kubeadm-init.yaml`
    **worker**: `kubeadm join --config conf/kubeadm-join.yaml`
 8. control plane 만: kubeconfig 배치, control-plane taint 제거
-9. 판정 — control plane 23항목 / worker 24항목
+9. 판정 — control plane 25항목 / worker 26항목
 
 worker 에도 docker·helm·podman 이 함께 설치된다. deb 세트를 역할별로 나누지 않고
 하나로 유지하기 때문이다. worker 에서 쓰지는 않지만 해롭지도 않으며, 두 노드의
@@ -924,7 +925,7 @@ DNS 차단으로 인한 소음이 거슬리면 `--allow-dns` 를 쓴다. 이름�
 | `apt-get` exit 100 (dpkg lock) | `unattended-upgrades` 와 경쟁 | 스크립트가 `DPkg::Lock::Timeout=900` 을 준다 |
 | (RHEL) CoreDNS 만 `Pending`/`CrashLoop`, 나머지 Running | firewalld 가 파드 → 노드 IP:6443 을 막는다 | `install.sh` 가 포트를 열고 파드 대역을 trusted 존에 넣는다(`os/rhel.sh`). `firewall-cmd --zone=trusted --list-sources` 확인 |
 | (RHEL) `sudo` 안에서 `helm`/`podman: command not found` | RHEL 의 sudo `secure_path` 에 `/usr/local/bin` 이 없다 | `os/rhel.sh` 가 PATH 앞에 붙인다. 수동 실행 시 `sudo env PATH=$PATH ...` |
-| AS 설치 후 또는 maintenance 해제 뒤 한 노드의 pod 들이 일제히 `CrashLoopBackOff`. 죽는 컨테이너는 `istio-proxy` 이고, 로그에 `inotify_fd_ >= 0` 또는 `couldn't initialize inotify: too many open files` 가 있다 | 노드의 `fs.inotify.max_user_instances` 가 기본값 128 이다. istio-proxy(uid 1337)가 pod 마다 inotify 인스턴스를 만들어 한도를 다 쓴다 | 아래 7.1절 |
+| AS 설치 후 또는 maintenance 해제 뒤 한 노드의 pod 들이 일제히 `CrashLoopBackOff`. 죽는 컨테이너는 `istio-proxy` 이고, 로그에 `inotify_fd_ >= 0` 또는 `couldn't initialize inotify: too many open files` 가 있다 | 노드의 `fs.inotify.max_user_instances` 가 기본값 128 이다. istio-proxy(uid 1337)가 pod 마다 inotify 인스턴스를 만들어 한도를 다 쓴다 | 지금 `install.sh` 는 설치 때 `/etc/sysctl.d/99-inotify.conf` 를 넣고 판정 `inotify 한도` 로 확인한다. 그 전 번들로 설치한 노드는 아래 7.1절 조치를 직접 실행 |
 
 ### 이전 스크립트로 설치한 노드의 `/usr` · `/etc` 소유자 복구
 
@@ -1008,14 +1009,14 @@ sudo find /proc/*/fd -lname 'anon_inode:inotify' 2>/dev/null | cut -d/ -f3 \
 
 실측값은 `max_user_instances = 128` 이었고, 사용량은 uid 0 이 **128/128**, uid 1337(istio-proxy)이 **125/128** 이었다. `max_user_instances` 는 UID 단위 한도다. 그래서 1337 이 한도에 닿으면 새로 뜨는 모든 사이드카가 SDS 파일 감시를 만들지 못하고 abort 된다. maintenance 해제처럼 pod 가 한꺼번에 재생성될 때 터지기 쉽다.
 
-**조치** (클러스터의 **모든 노드**에서 실행. 문제가 안 난 노드도 기본값은 같다)
+**조치** (`install.sh` 가 inotify 한도를 넣기 전 번들로 설치한 클러스터라면 **모든 노드**에서 실행한다. 문제가 안 난 노드도 기본값은 같다. 지금 번들로 설치한 노드에는 이미 들어 있다. 아래 "재발 방지" 참고)
 
 ```bash
 # 즉시 적용
 sudo sysctl -w fs.inotify.max_user_instances=8192
 sudo sysctl -w fs.inotify.max_user_watches=1048576
 
-# 재부팅 후에도 유지
+# 재부팅 후에도 유지 (install.sh 가 넣는 파일과 이름·내용이 같다)
 sudo tee /etc/sysctl.d/99-inotify.conf >/dev/null <<'EOF'
 fs.inotify.max_user_instances = 8192
 fs.inotify.max_user_watches   = 1048576
@@ -1035,7 +1036,10 @@ kubectl -n uipath get pods --no-headers | grep -E "CrashLoopBackOff|PostStartHoo
 kubectl -n uipath get events --field-selector type=Warning | grep -c FailedPostStartHook   # 새로 늘지 않아야 한다
 ```
 
-**재발 방지:** 현재 `build-bundle.sh` 가 만드는 `k8s-sysctl.conf` 에는 inotify 항목이 없다. 새로 구축할 때는 `10-k8s/install.sh` 직후, AS 설치 전에 위 `99-inotify.conf` 를 모든 노드에 넣어 둔다.
+**재발 방지:** 이제 설치가 이 한도를 넣는다. `build-bundle.sh` 가 `conf/k8s-inotify.conf` 를 만들고(값은 `00-common/versions.env` 의 `INOTIFY_MAX_USER_INSTANCES` / `INOTIFY_MAX_USER_WATCHES`), `install.sh` 의 1단계(커널·swap·sysctl)가 이를 `/etc/sysctl.d/99-inotify.conf` 로 설치한 뒤 `sysctl --system` 으로 적용한다. 이 단계는 역할을 나누기 전에 실행되므로 control plane(첫 CP·추가 CP)과 worker 모두에 들어간다. Ubuntu 와 RHEL 계열도 같은 코드 경로를 탄다. 부팅 때는 `systemd-sysctl` 이 같은 파일을 읽으므로 재부팅 후에도 유지된다. 판정(`--check-only`)의 `inotify 한도` 항목이 실제 값을 확인한다.
+
+- **이미 설치된 노드:** 이 변경 전 번들로 설치한 노드에는 파일이 없다. 위 조치를 직접 실행한다. 새 번들의 `install.sh` 를 다시 실행해도 적용되지만(이미 init/join 된 노드는 그 단계를 건너뛴다), 패키지 재설치(Ubuntu 는 docker 데몬 재시작, 4.3절)와 containerd 재시작이 함께 일어나므로 운영 중인 노드에는 권하지 않는다. 다중 CP 의 control plane 에서 인자 없이 다시 실행하면 taint 정책이 단일 CP 기준(제거)으로 잡히므로, 그래도 실행한다면 `--keep-taint` 를 준다. 수동 조치와 `install.sh` 가 같은 파일에 같은 내용을 쓰므로, 나중에 새 번들로 다시 설치해도 `변경 없음` 으로 끝난다. 새 번들의 `sudo ./install.sh --check-only` 로 빠진 노드를 찾을 수 있다.
+- **다른 파일이 덮어쓰는지:** sysctl.d 파일은 디렉터리(`/etc`, `/run`, `/usr/lib` 등)와 무관하게 파일 이름 순으로 적용되고, 같은 키는 뒤 파일이 이긴다. `sysctl --system` 은 `/etc/sysctl.conf` 를 마지막에 한 번 더 읽는다. `99-inotify.conf` 보다 뒤에 오는 것은 이 번들의 `99-k8s.conf`(inotify 항목 없음)와 `/etc/sysctl.conf` 를 가리키는 `99-sysctl.conf` 정도다. 누가 그보다 뒤에서 더 작은 값을 넣으면 판정 `inotify 한도` 가 FAIL 로 잡는다. 어느 파일이 마지막으로 값을 정했는지는 `sudo sysctl --system | grep -E 'Applying|inotify'` 로 본다.
 
 ### 로그 위치
 

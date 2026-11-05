@@ -281,6 +281,11 @@ run_checks() {
     check "swap 비활성"        bash -c "[[ -z \$(swapon --show --noheadings) ]]"
     check "br_netfilter 로드"  bash -c "lsmod | grep -q br_netfilter"
     check "ip_forward=1"       bash -c "[[ \$(sysctl -n net.ipv4.ip_forward) == 1 ]]"
+    # 이름 순으로 뒤에 오는 sysctl.d 파일이나 /etc/sysctl.conf 가 더 작은 값으로
+    # 덮어쓰면 여기서 잡힌다. 관리자가 더 크게 잡았으면 통과시킨다.
+    check "inotify 한도(instances>=${INOTIFY_MAX_USER_INSTANCES}, watches>=${INOTIFY_MAX_USER_WATCHES})" \
+        bash -c "(( \$(sysctl -n fs.inotify.max_user_instances) >= ${INOTIFY_MAX_USER_INSTANCES} \
+                 && \$(sysctl -n fs.inotify.max_user_watches) >= ${INOTIFY_MAX_USER_WATCHES} ))"
 
     # 요구사항: helm 3.8+ / docker 28+ / podman 4.9+
     check "helm ${HELM_VERSION}"   bash -c "helm version --short | grep -q '${HELM_VERSION}'"
@@ -600,6 +605,8 @@ modprobe overlay && modprobe br_netfilter
 ok "overlay / br_netfilter 로드"
 
 install_file "${CONF_DIR}/k8s-sysctl.conf" /etc/sysctl.d/99-k8s.conf
+# inotify 한도. 역할·OS 와 무관하게 넣는다(README 7.1절). 부팅 때는 systemd-sysctl 이 읽는다.
+install_file "${CONF_DIR}/k8s-inotify.conf" /etc/sysctl.d/99-inotify.conf
 sysctl --system >/dev/null
 ok "sysctl 적용"
 

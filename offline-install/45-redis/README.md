@@ -50,7 +50,7 @@ TLS URI 형식은 `rediss://:<password>@<REDIS_HOSTNAME>:<REDIS_PORT>`이며, �
 
 ## 트러블슈팅 — "Redis 인증서 오류"가 의심될 때
 
-AS 서비스가 기동하지 못하면 Redis TLS 문제로 보이기 쉽다. 하지만 2026-11-04 사례에서 실제 원인은 노드의 inotify 한도였다([`10-k8s/README.md` §7.1](../10-k8s/README.md#71-inotify-한도-초과로-istio-proxy-가-crashloopbackoff)). **Redis 쪽부터 아래 순서로 검증하고, 모두 정상이면 클러스터 쪽을 본다.**
+AS 서비스가 기동하지 못하면 Redis TLS 문제로 보이기 쉽다. 하지만 2026-11-04 사례에서 실제 원인은 노드의 inotify 한도였다([`10-k8s/README.md` §7.1](../10-k8s/README.md#71-inotify-한도-초과로-istio-proxy-가-crashloopbackoff)). 지금은 `10-k8s/install.sh`가 설치 때 이 한도를 넣지만, 그 전 번들로 설치한 노드에는 없을 수 있다. **Redis 쪽부터 아래 순서로 검증하고, 모두 정상이면 클러스터 쪽을 본다.**
 
 ### 1. 서버 인증서 · 키 · 체인 (Redis 호스트)
 

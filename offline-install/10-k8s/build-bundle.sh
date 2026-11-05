@@ -254,6 +254,15 @@ net.bridge.bridge-nf-call-ip6tables = 1
 net.ipv4.ip_forward                 = 1
 EOF
 
+# 워크로드용 inotify 한도(값은 versions.env). kubeadm 이 요구하는 항목이 아니라서
+# k8s-sysctl.conf 와 나눴다. install.sh 가 /etc/sysctl.d/99-inotify.conf 로 넣는다.
+# README 7.1절의 수동 조치와 파일 이름·내용이 같다. 그래서 수동으로 고친 노드에
+# 다시 설치해도 install_file 이 "변경 없음"으로 넘어간다. 주석을 넣지 않는 것도 그 때문이다.
+cat > "${CONF_DIR}/k8s-inotify.conf" <<EOF
+fs.inotify.max_user_instances = ${INOTIFY_MAX_USER_INSTANCES}
+fs.inotify.max_user_watches   = ${INOTIFY_MAX_USER_WATCHES}
+EOF
+
 ok "conf 생성 완료"
 
 #=====================================================================

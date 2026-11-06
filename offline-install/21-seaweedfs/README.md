@@ -64,6 +64,7 @@ seaweedfs-4.48/
 ├── BUNDLE-INFO               이미지@다이제스트, 라이선스 라벨
 ├── SHA256SUMS                번들 안 모든 파일의 sha256
 ├── install.sh                설치·판정(6절)
+├── apply-cors.sh             버킷 CORS 적용(5절)
 ├── README.md
 ├── 00-common/                versions.env + site.env + common.sh + os/
 ├── images/                   seaweedfs, aws-cli (docker-archive tar)
@@ -71,7 +72,8 @@ seaweedfs-4.48/
     ├── images.list
     ├── images.digests        amd64 매니페스트 다이제스트
     ├── docker-compose.yml.tmpl
-    └── s3.json.tmpl          S3 자격증명
+    ├── s3.json.tmpl          S3 자격증명
+    └── s3-cors.json.tmpl     버킷 CORS 규칙
 ```
 
 인증서는 번들에 넣지 않는다. `05-certs` 가 발급하고(`out/weed/`) `deploy-certs.sh`
@@ -99,6 +101,7 @@ command:
   - -s3.cert.file=/certs/weed.crt
   - -s3.key.file=/certs/weed.key
   - -s3.domainName=<WEED_HOSTNAME>
+  - -s3.allowedOrigins=<WEED_CORS_ORIGINS>   # 브라우저 CORS 허용 오리진
 ports: ["<SEAWEEDFS_S3_PORT>:8333"]   # 호스트 포트만 변수(기본 8333)
 stop_grace_period: 1m
 ```
@@ -122,6 +125,9 @@ stop_grace_period: 1m
   SIGKILL 로 끊긴다.
 - **`-s3.domainName`** 으로 가상 호스트 스타일(`<bucket>.<host>`)을 받는다.
   그래서 `05-certs` 는 MinIO 처럼 `*.<WEED_HOSTNAME>` 와일드카드를 넣는다.
+- **`-s3.allowedOrigins`** 는 브라우저에서 S3 를 직접 부를 때 허용할 오리진이다.
+  기본값이 `*` 라 반드시 좁힌다. 자격증명을 동반한 요청에서 모든 사이트를
+  허용하게 되기 때문이다. 값은 `site.env` 의 `WEED_CORS_ORIGINS` 다(5절).
 
 ### 파일 소유권 — uid 1000
 
@@ -150,6 +156,7 @@ root 소유 0600 이라 그대로 마운트하면 읽지 못한다.
 | `WEED_ROOT_PASSWORD` | `s3.json` 의 secretKey. **비우면 무작위 생성**하고 설치 끝에 출력한다(권장) |
 | `WEED_DATA_DIR` | S3 데이터의 호스트 경로. 기본 `/data/weed`. 컨테이너의 `/data` 에 마운트된다 |
 | `SEAWEEDFS_S3_PORT` | 호스트에 노출할 S3 API(HTTPS) 포트. 기본 8333. 컨테이너 안은 8333 고정 |
+| `WEED_CORS_ORIGINS` | 브라우저 CORS 허용 오리진(쉼표 구분). `-s3.allowedOrigins` 와 버킷 CORS 규칙에 함께 들어간다 |
 
 `versions.env` 의 `SEAWEEDFS_UID`(1000), `SEAWEEDFS_REGION`(기본 `MINIO_REGION` 과
 같음)도 쓴다. SeaweedFS 는 리전을 검사하지 않지만 UiPath AS 등 S3 클라이언트가 리전을
@@ -164,11 +171,62 @@ root 소유 0600 이라 그대로 마운트하면 읽지 못한다.
   `/data/weed` 를 쓴다.
 - `SEAWEEDFS_S3_PORT` 는 `versions.env` 가 `${SEAWEEDFS_S3_PORT:-8333}` 으로 받는다.
 - `WEED_HOSTNAME` 이 비면 `weed.<도메인>`, `WEED_HOST_IP` 가 비면 기본 경로의 IP 를 쓴다.
+- `WEED_CORS_ORIGINS` 가 비면 `https://<AS_FQDN>` 을 쓴다. `AS_FQDN` 도 비어 있으면
+  멈춘다. 기본값을 `*` 로 두면 조용히 모든 오리진이 열리기 때문에 일부러 실패시킨다.
 
 `install.sh` 는 `SEAWEEDFS_S3_PORT` 가 1~65535 범위의 숫자가 아니거나, `WEED_HOSTNAME`
 에 영문자·숫자·`.`·`-` 외의 문자가 있거나, `WEED_DATA_DIR` 이 공백 없는 단순 절대 경로가
 아니면 멈춘다. 자격증명은 `s3.json` 에 그대로 들어가므로 사용자는 영문자·숫자·`._-`
 3~128자, 비밀번호는 영문자·숫자·`._~+/=-` 8~128자만 받는다.
+
+
+### 브라우저 CORS — 두 계층
+
+브라우저가 S3 를 직접 부르면(AS 의 파일 업로드 등) CORS 가 필요하다. 설정은 두 군데다.
+
+| 계층 | 설정 위치 | 역할 |
+|---|---|---|
+| 서버 전역 | compose 의 `-s3.allowedOrigins` (`install.sh` 가 생성) | preflight 를 통과시킬지 결정한다(문지기) |
+| 버킷 단위 | S3 `PutBucketCors` API (`apply-cors.sh` 가 적용) | 통과한 뒤 돌려줄 `ExposeHeaders` / `MaxAge` 를 정한다 |
+
+전역만 설정해도 CORS 는 동작한다. 다만 SeaweedFS 가 돌려주는 기본 `ExposeHeaders` 는
+`ETag, Content-Length, Content-Type, Last-Modified, x-amz-request-id, x-amz-version-id`
+라서 `x-amz-server-side-encryption` 과 `x-amz-id-2` 가 빠지고 `Max-Age` 도 없다.
+그 헤더가 필요하면 버킷 CORS 를 함께 걸어야 한다.
+
+반대로 버킷 CORS 만 걸면 안 된다. 4.48 은 슬래시 없는 `OPTIONS /<버킷>` 에서 버킷
+규칙을 무시하고 전역 기본값 `*` 를 그대로 내보낸다([seaweedfs#12025][sw12025]).
+실측 결과다. 전역을 좁히면 막힌다.
+
+```
+# 버킷 CORS 만 적용, 전역은 기본값 '*' — 외부 오리진 https://evil.example
+/bucket                 200  Access-Control-Allow-Origin: *      <- 누출
+/bucket/                403  (헤더 없음)
+/bucket/obj             403  (헤더 없음)
+
+# 전역을 WEED_CORS_ORIGINS 로 좁힌 뒤 — 같은 외부 오리진
+/bucket                 응답 없이 연결 종료
+/bucket/                403
+/bucket/obj             403
+```
+
+[sw12025]: https://github.com/seaweedfs/seaweedfs/issues/12025
+
+버킷은 만들어진 뒤에만 CORS 를 걸 수 있다. 그래서 `install.sh` 에 넣지 않고
+`apply-cors.sh` 로 분리했다. AS 버킷을 만든 뒤 실행한다.
+
+```bash
+sudo ./apply-cors.sh <버킷이름> [...]   # 지정한 버킷
+sudo ./apply-cors.sh --all              # 현재 존재하는 모든 버킷
+sudo ./apply-cors.sh --show <버킷이름>  # 적용된 설정만 확인
+```
+
+규칙은 `conf/s3-cors.json.tmpl` 이고 오리진만 치환된다. 적용 후 `GetBucketCors` 로
+되읽고, 실제 `OPTIONS` 요청을 던져 허용 오리진은 200 에 정확한 오리진이 돌아오는지,
+외부 오리진은 막히는지 확인한다.
+
+오리진을 바꿀 때는 `site.env` 의 `WEED_CORS_ORIGINS` 를 고치고 `install.sh` 를 다시
+실행한 뒤(전역 반영) `apply-cors.sh` 를 다시 실행한다(버킷 반영).
 
 ---
 

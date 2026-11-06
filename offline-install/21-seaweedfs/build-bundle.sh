@@ -186,6 +186,10 @@ services:
       - -s3.key.file=/certs/weed.key
       # 가상 호스트 스타일 버킷 주소(<bucket>.<host>). 인증서에 *.<host> 가 있다.
       - -s3.domainName=__WEED_HOSTNAME__
+      # 브라우저 CORS 허용 오리진(쉼표 구분). 버킷 CORS 와 2중으로 둔다.
+      # 4.48 은 버킷 CORS 만 설정하면 슬래시 없는 OPTIONS /<버킷> 에서
+      # 전역 기본값 '*' 가 그대로 나간다(seaweedfs#12025). 전역을 좁혀 막는다.
+      - -s3.allowedOrigins=__WEED_CORS_ORIGINS__
     ports:
       - "__SEAWEEDFS_S3_PORT__:8333"   # S3 API (HTTPS)
     volumes:
@@ -232,6 +236,37 @@ EOF
 ok "s3.json.tmpl"
 
 #=====================================================================
+# 3-1. 버킷 CORS 규칙 템플릿
+#
+# 브라우저가 S3 를 직접 부를 때 돌려줄 CORS 규칙이다.
+# apply-cors.sh 가 __WEED_CORS_ORIGINS_JSON__ 을 치환해 put-bucket-cors 로 넣는다.
+# 서버 전역(-s3.allowedOrigins)과 2중이다. 역할이 다르다.
+#   전역 : preflight 를 통과시킬지 결정한다(문지기).
+#   버킷 : 통과한 뒤 돌려줄 ExposeHeaders / MaxAge 를 정한다.
+# 버킷 CORS 만 두면 4.48 에서 슬래시 없는 OPTIONS /<버킷> 이 전역 기본값 '*' 를
+# 그대로 내보낸다(seaweedfs#12025). 그래서 전역도 함께 좁힌다.
+#=====================================================================
+cat > "${CONF_DIR}/s3-cors.json.tmpl" <<'EOF'
+{
+  "CORSRules": [
+    {
+      "AllowedHeaders": ["*"],
+      "AllowedMethods": ["POST", "GET", "HEAD", "DELETE", "PUT"],
+      "AllowedOrigins": [__WEED_CORS_ORIGINS_JSON__],
+      "ExposeHeaders": [
+        "etag",
+        "x-amz-server-side-encryption",
+        "x-amz-request-id",
+        "x-amz-id-2"
+      ],
+      "MaxAgeSeconds": 3000
+    }
+  ]
+}
+EOF
+ok "s3-cors.json.tmpl"
+
+#=====================================================================
 # 4. 패키징
 #=====================================================================
 step "번들 패키징"
@@ -246,8 +281,9 @@ fi
 cp "${SCRIPT_DIR}/../00-common/common.sh" "${BUNDLE_DIR}/00-common/"
 cp -R "${SCRIPT_DIR}/../00-common/os"     "${BUNDLE_DIR}/00-common/"
 cp "${SCRIPT_DIR}/install.sh"             "${BUNDLE_DIR}/"
+cp "${SCRIPT_DIR}/apply-cors.sh"          "${BUNDLE_DIR}/"
 cp "${SCRIPT_DIR}/README.md"              "${BUNDLE_DIR}/" 2>/dev/null || true
-chmod +x "${BUNDLE_DIR}/install.sh"
+chmod +x "${BUNDLE_DIR}/install.sh" "${BUNDLE_DIR}/apply-cors.sh"
 
 cat > "${BUNDLE_DIR}/BUNDLE-INFO" <<EOF
 bundle        : ${BUNDLE_NAME}

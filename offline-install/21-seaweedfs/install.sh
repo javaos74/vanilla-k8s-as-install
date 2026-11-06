@@ -54,6 +54,11 @@ WEED_HOSTNAME="${WEED_HOSTNAME:-weed${_WEED_DOMAIN:+.${_WEED_DOMAIN}}}"
 WEED_HOST_IP="${WEED_HOST_IP:-$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}' || true)}"
 [[ -n "$WEED_HOST_IP" ]] || WEED_HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
 
+# 브라우저 CORS 허용 오리진. site.env 의 WEED_CORS_ORIGINS 를 쓴다.
+# 없으면 AS_FQDN 으로 만든다. 둘 다 없으면 아래 검증에서 멈춘다.
+# 와일드카드로 조용히 넘어가지 않게 기본값을 '*' 로 두지 않는다.
+WEED_CORS_ORIGINS="${WEED_CORS_ORIGINS:-${AS_FQDN:+https://${AS_FQDN}}}"
+
 # 판정에 쓸 버킷 이름. 남더라도 해가 없도록 전용 이름을 쓴다.
 SMOKE_BUCKET="weed-smoke-test"
 SMOKE_DIR=""
@@ -383,6 +388,12 @@ if [[ ! "$SEAWEEDFS_S3_PORT" =~ ^[0-9]{1,5}$ ]] || ((SEAWEEDFS_S3_PORT < 1 || SE
     die "SEAWEEDFS_S3_PORT 값이 유효하지 않다: ${SEAWEEDFS_S3_PORT}"
 fi
 [[ "$WEED_HOSTNAME" =~ ^[A-Za-z0-9.-]+$ ]] || die "WEED_HOSTNAME 값이 유효하지 않다: ${WEED_HOSTNAME}"
+[[ -n "$WEED_CORS_ORIGINS" ]] \
+    || die "WEED_CORS_ORIGINS 가 비었다. site.env 에 설정할 것(예: https://as.example.internal)."
+[[ "$WEED_CORS_ORIGINS" != *"*"* ]] \
+    || die "WEED_CORS_ORIGINS 에 * 는 쓰지 않는다. 오리진을 명시할 것: ${WEED_CORS_ORIGINS}"
+[[ "$WEED_CORS_ORIGINS" =~ ^https?://[A-Za-z0-9.:-]+(,https?://[A-Za-z0-9.:-]+)*$ ]] \
+    || die "WEED_CORS_ORIGINS 는 쉼표로 구분한 스킴+호스트 목록이어야 한다: ${WEED_CORS_ORIGINS}"
 [[ "$WEED_DATA_DIR" =~ ^/[A-Za-z0-9_./-]+$ && "$WEED_DATA_DIR" != *".."* ]] \
     || die "WEED_DATA_DIR 는 공백 없는 단순 절대 경로여야 한다: ${WEED_DATA_DIR}"
 [[ -z "$WEED_HOST_IP" || "$WEED_HOST_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
@@ -547,6 +558,7 @@ step "compose 파일 생성"
 sed -e "s|__SEAWEEDFS_IMAGE__|${SEAWEEDFS_IMAGE}|g" \
     -e "s|__SEAWEEDFS_S3_PORT__|${SEAWEEDFS_S3_PORT}|g" \
     -e "s|__WEED_HOSTNAME__|${WEED_HOSTNAME}|g" \
+    -e "s|__WEED_CORS_ORIGINS__|${WEED_CORS_ORIGINS}|g" \
     -e "s|__WEED_DATA_DIR__|${WEED_DATA_DIR}|g" \
     -e "s|__WEED_DIR__|${WEED_DIR}|g" \
     "${CONF_DIR}/docker-compose.yml.tmpl" > "${COMPOSE_FILE}.new"
@@ -603,6 +615,8 @@ if [[ "${GENERATED_PW:-0}" == 1 ]]; then
 fi
 echo "  S3 엔드포인트: https://${WEED_HOSTNAME}:${SEAWEEDFS_S3_PORT}   (리전 ${SEAWEEDFS_REGION}, HTTPS 전용)"
 echo "  데이터:        ${WEED_DATA_DIR}"
+echo "  CORS 오리진:   ${WEED_CORS_ORIGINS}   (서버 전역 -s3.allowedOrigins)"
+echo "  버킷 CORS:     sudo ./apply-cors.sh <버킷이름> [...]  (ExposeHeaders / MaxAge)"
 echo
 echo "  이름으로 접속하려면 클라이언트의 /etc/hosts 에 매핑이 필요하다:"
 echo "    ${WEED_HOST_IP:-<노드IP>} ${WEED_HOSTNAME}"

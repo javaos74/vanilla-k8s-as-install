@@ -150,8 +150,9 @@ fi
 #
 # S3 포트 : 컨테이너 안의 S3 게이트웨이(-s3.port)와 healthcheck 는 8333 고정이다.
 #   ports 의 왼쪽(__SEAWEEDFS_S3_PORT__)만 호스트 포트로, site.env 의
-#   SEAWEEDFS_S3_PORT(기본 8333)를 install.sh 가 치환한다. install.sh 는 아직
-#   없으므로(README 6절) 지금은 이 값이 BUNDLE-INFO 표기에만 반영된다.
+#   SEAWEEDFS_S3_PORT(기본 8333)를 install.sh 가 치환한다.
+# 데이터 : __WEED_DATA_DIR__ 은 site.env 의 WEED_DATA_DIR(기본 /data/weed)로
+#   install.sh 가 치환한다.
 #=====================================================================
 step "compose 템플릿 생성"
 
@@ -244,14 +245,9 @@ else
 fi
 cp "${SCRIPT_DIR}/../00-common/common.sh" "${BUNDLE_DIR}/00-common/"
 cp -R "${SCRIPT_DIR}/../00-common/os"     "${BUNDLE_DIR}/00-common/"
+cp "${SCRIPT_DIR}/install.sh"             "${BUNDLE_DIR}/"
 cp "${SCRIPT_DIR}/README.md"              "${BUNDLE_DIR}/" 2>/dev/null || true
-# install.sh 는 아직 검토 단계라 없을 수 있다. 있으면 싣는다.
-if [[ -f "${SCRIPT_DIR}/install.sh" ]]; then
-    cp "${SCRIPT_DIR}/install.sh" "${BUNDLE_DIR}/"
-    chmod +x "${BUNDLE_DIR}/install.sh"
-else
-    warn "install.sh 가 아직 없다. 번들에는 이미지와 템플릿만 들어간다(README 6절)."
-fi
+chmod +x "${BUNDLE_DIR}/install.sh"
 
 cat > "${BUNDLE_DIR}/BUNDLE-INFO" <<EOF
 bundle        : ${BUNDLE_NAME}

@@ -4,9 +4,10 @@
 단일 노드 `weed server`(master + volume + filer + S3 게이트웨이를 한 프로세스로)
 구성이고, S3 API 는 사내 CA 인증서로 TLS 전용이다. 컨테이너명은 `seaweedfs` 다.
 
-**현재 상태: 번들 빌드 + 템플릿 기동 검증까지 완료, `install.sh` 는 아직 없다(6절).**
+**현재 상태: 번들 빌드 + 템플릿 기동 검증 완료, `install.sh` 작성(6절).
+`install.sh` 는 실제 서버에서 아직 실행하지 않았다. 정적 검사만 했다(7절).**
 Ubuntu 26.04 빌드 호스트에서 번들 빌드와 S3 왕복 스모크 테스트 27/27 을
-확인했다(7절).
+확인했다(7절). 이 스모크 테스트는 `install.sh` 가 아니라 템플릿을 손으로 치환해 했다.
 
 ---
 
@@ -61,9 +62,10 @@ OS 에 의존하지 않으므로 어느 Ubuntu 이미지에서 만들어도 같�
 ```
 seaweedfs-4.48/
 ├── BUNDLE-INFO               이미지@다이제스트, 라이선스 라벨
-├── SHA256SUMS                10개 파일
+├── SHA256SUMS                번들 안 모든 파일의 sha256
+├── install.sh                설치·판정(6절)
 ├── README.md
-├── 00-common/                versions.env + site.env + common.sh
+├── 00-common/                versions.env + site.env + common.sh + os/
 ├── images/                   seaweedfs, aws-cli (docker-archive tar)
 └── conf/
     ├── images.list
@@ -73,7 +75,10 @@ seaweedfs-4.48/
 ```
 
 인증서는 번들에 넣지 않는다. `05-certs` 가 발급하고(`out/weed/`) `deploy-certs.sh`
-가 각 노드 `/opt/pki/weed/` 에 둔다.
+가 각 노드 `/opt/pki/weed/` 에 둔다. 없으면 `install.sh` 가 로컬 CA 로 발급한다(6절).
+
+위 산출물 크기와 트리는 `install.sh` 를 넣기 전 빌드(2026-10-17)의 것이다. 지금은
+`install.sh` 가 함께 실린다. `install.sh` 를 넣은 뒤에는 번들을 다시 빌드해 보지 않았다.
 
 ---
 
@@ -104,7 +109,7 @@ stop_grace_period: 1m
   인증이 없어서, 공개하면 S3 자격증명을 우회해 파일을 읽고 지울 수 있다.
 - **S3 포트는 컨테이너 안에서 8333 고정이고, 호스트 포트만 `SEAWEEDFS_S3_PORT` 로
   바꾼다.** `-s3.port` 와 healthcheck(`https://localhost:8333/healthz`)는 8333 그대로다.
-  템플릿의 `__SEAWEEDFS_S3_PORT__` 는 ports 왼쪽 한 곳뿐이다(5절, 6절).
+  템플릿의 `__SEAWEEDFS_S3_PORT__` 는 ports 왼쪽 한 곳뿐이고 `install.sh` 가 치환한다(5절, 6절).
 - **`-s3.cert.file` 을 주면 `-s3.port` 는 HTTPS 전용이 된다.** 평문 HTTP 요청은
   실패한다. 평문 포트를 따로 열려면 `-s3.port.https` 를 써야 하는데 쓰지 않는다.
 - **`-volume.max=0`.** 이미지 entrypoint 가 `-master.volumeSizeLimitMB=1024` 를
@@ -131,7 +136,7 @@ root 소유 0600 이라 그대로 마운트하면 읽지 못한다.
 
 읽지 못하면 익명 허용으로 넘어가지 않고 종료한다. 안전한 쪽으로 실패한다.
 `install.sh` 는 `/opt/pki/weed/weed.{crt,key}` 를 `/opt/weed/certs/` 로 복사하고
-`1000:1000`, 키·`s3.json` 0600 으로 둬야 한다.
+`1000:1000`, 키·`s3.json` 0600 으로 둔다(6절).
 
 ---
 
@@ -142,34 +147,158 @@ root 소유 0600 이라 그대로 마운트하면 읽지 못한다.
 | `WEED_HOSTNAME` | 클라이언트 접속 이름. 인증서 CN/SAN, `-s3.domainName` |
 | `WEED_HOST_IP` | 인증서 SAN 의 IP. 비우면 이름으로만 검증된다 |
 | `WEED_ROOT_USER` | `s3.json` 의 accessKey |
-| `WEED_ROOT_PASSWORD` | `s3.json` 의 secretKey. 비워 두는 것을 권장(무작위 생성 예정) |
+| `WEED_ROOT_PASSWORD` | `s3.json` 의 secretKey. **비우면 무작위 생성**하고 설치 끝에 출력한다(권장) |
+| `WEED_DATA_DIR` | S3 데이터의 호스트 경로. 기본 `/data/weed`. 컨테이너의 `/data` 에 마운트된다 |
 | `SEAWEEDFS_S3_PORT` | 호스트에 노출할 S3 API(HTTPS) 포트. 기본 8333. 컨테이너 안은 8333 고정 |
 
 `versions.env` 의 `SEAWEEDFS_UID`(1000), `SEAWEEDFS_REGION`(기본 `MINIO_REGION` 과
 같음)도 쓴다. SeaweedFS 는 리전을 검사하지 않지만 UiPath AS 등 S3 클라이언트가 리전을
 요구한다.
 
-**`SEAWEEDFS_S3_PORT` 가 지금 반영되는 곳은 번들의 `BUNDLE-INFO` 표기뿐이다.**
-`install.sh` 가 아직 없어서(6절) compose 템플릿의 `__SEAWEEDFS_S3_PORT__` 를 치환하는
-코드가 없다. 템플릿을 손으로 치환해 띄울 때는 이 자리에 호스트 포트를 넣는다.
-`site.env` 에 키가 없으면 `versions.env` 의 기본값 8333 이 쓰인다.
+키가 없을 때의 기본값:
+
+- `WEED_DATA_DIR` 은 `versions.env` 가 `${WEED_DATA_DIR:-/data/weed}` 로 받고,
+  `install.sh` 도 같은 기본값을 한 번 더 둔다(`45-redis` 의 `REDIS_PORT` 와 같은 방식).
+  이름은 `80-postgresql`(`PG_DATA_DIR`)·`20-minio`(`MINIO_DATA_DIR`)처럼
+  `<접두어>_DATA_DIR` 이다. 그래서 이 키가 없는 기존 `site.env` 로 만든 번들도
+  `/data/weed` 를 쓴다.
+- `SEAWEEDFS_S3_PORT` 는 `versions.env` 가 `${SEAWEEDFS_S3_PORT:-8333}` 으로 받는다.
+- `WEED_HOSTNAME` 이 비면 `weed.<도메인>`, `WEED_HOST_IP` 가 비면 기본 경로의 IP 를 쓴다.
+
+`install.sh` 는 `SEAWEEDFS_S3_PORT` 가 1~65535 범위의 숫자가 아니거나, `WEED_HOSTNAME`
+에 영문자·숫자·`.`·`-` 외의 문자가 있거나, `WEED_DATA_DIR` 이 공백 없는 단순 절대 경로가
+아니면 멈춘다. 자격증명은 `s3.json` 에 그대로 들어가므로 사용자는 영문자·숫자·`._-`
+3~128자, 비밀번호는 영문자·숫자·`._~+/=-` 8~128자만 받는다.
 
 ---
 
-## 6. 아직 하지 않은 것
+## 6. 설치 (`install.sh`)
 
-- **`install.sh`** — 이미지 적재, `/opt/weed` 생성, 템플릿 치환, 소유권, 기동,
-  판정. 4절의 소유권과 7절의 판정 항목을 그대로 옮기면 된다. 빌드는
-  `install.sh` 가 없으면 경고하고 이미지·템플릿만 담는다.
-  포트는 `__SEAWEEDFS_S3_PORT__` 를 `SEAWEEDFS_S3_PORT` 로 치환하고, 다른 컴포넌트와
-  같은 입력 검증(1~65535 숫자)·선점 확인·호스트 수신 판정을 넣는다.
+> **`install.sh` 는 실제 서버나 VM 에서 아직 실행하지 않았다.** 문법 검사, shellcheck,
+> 템플릿 치환 결과 확인 같은 정적 검사만 했다(7절). 아래 판정 항목도 실제로 통과한 적이 없다.
+
+```bash
+# 빌드 호스트(인터넷 O)
+cd offline-install/21-seaweedfs && ./build-bundle.sh
+
+# 타깃 노드(에어갭)
+scp bundle/seaweedfs-*.tar.gz{,.sha256} <타깃>:~/
+sha256sum -c seaweedfs-*.tar.gz.sha256
+tar xzf seaweedfs-*.tar.gz && cd seaweedfs-*
+
+sudo ../offline-install/90-verify/airgap-on.sh   # 검증 목적
+sudo ./install.sh
+```
+
+옵션은 `--check-only`(판정만), `--test-restart`(자동 복구 검증),
+`--uninstall`(컨테이너만 제거, 설정·데이터 보존) 이다. `20-minio` 와 같다.
+
+전제: `10-k8s` 로 docker + docker compose 가 설치돼 있어야 한다. 사내 CA 인증서를
+쓰려면 `05-certs` 의 `make-certs.sh` + `deploy-certs.sh` 를 먼저 한다.
+
+### 설치 단계
+
+| 단계 | 하는 일 |
+|---|---|
+| 0. 사전 확인 | `SHA256SUMS` 무결성 검증, 에어갭 여부 경고, docker/compose 확인, 입력값 검증(5절), `SEAWEEDFS_S3_PORT` 선점 확인 |
+| 1. 이미지 적재 | `images/*.tar` 를 `docker load`, `images.list` 의 2개가 모두 있는지 확인 |
+| 2. 자격증명 | `/opt/weed`, `/opt/weed/certs`, `WEED_DATA_DIR` 생성. `/opt/weed/weed.env`(0600)가 있으면 그 값을, 없으면 `site.env` 값 또는 무작위 비밀번호로 만든다. 그 값으로 `s3.json` 을 다시 만들어 JSON 검사 후 `1000:1000` · 0600 으로 둔다 |
+| 3. TLS | `/opt/pki/weed/weed.{crt,key}`(05-certs) → 기존 `/opt/weed/certs` → 로컬 CA 발급 순서로 고른다. 결과를 `1000:1000`, 키 0600 으로 맞춘다 |
+| 4. compose | 템플릿의 `__SEAWEEDFS_IMAGE__` · `__SEAWEEDFS_S3_PORT__` · `__WEED_HOSTNAME__` · `__WEED_DATA_DIR__` · `__WEED_DIR__` 를 치환한다. 남은 자리표시자가 있거나 `docker compose config` 가 실패하면 멈춘다. `install_file` 로 바뀔 때만 백업 후 교체한다 |
+| 5. 기동 | `docker compose up -d` 후 `https://127.0.0.1:<SEAWEEDFS_S3_PORT>/healthz` 응답을 기다린다 |
+| 6. 판정 | 아래 판정 항목 |
+
+`s3.json` 은 파일 하나를 바인드 마운트한다. 파일을 교체하면 실행 중인 컨테이너는 옛
+파일을 계속 보므로, `s3.json` 이나 인증서·키 내용이 바뀐 실행에서는
+`docker compose up -d --force-recreate` 로 컨테이너를 다시 만든다.
+
+로컬 CA 발급은 `45-redis` 와 같은 방식이다. CA(`/opt/weed/certs/ca.crt`)를 만들어 서버
+인증서에 서명하고 CA 키는 버린다. SAN 은 `<WEED_HOSTNAME>`, `*.<WEED_HOSTNAME>`,
+`localhost`, `<WEED_HOST_IP>`, `127.0.0.1` 이다. 클라이언트는 이 `ca.crt` 를 신뢰해야 한다.
+운영에는 05-certs 인증서를 권장한다.
+
+### 판정 36항목
+
+SAN 에 노드 IP 가 없으면 IP 검증을 건너뛰어 35항목이다.
+
+```
+docker / compose 사용 가능 · 이미지 2개 적재됨
+compose 파일 · compose 문법 · env(0600)
+s3.json 이 uid 1000 소유·0600 · s3.json JSON 유효
+인증서·키·CA 존재 · uid 1000 소유·키 0600 · CA 체인 검증
+SAN 에 <WEED_HOSTNAME> · SAN 에 *.<WEED_HOSTNAME>
+데이터 디렉터리 존재
+컨테이너 실행 중(크래시 루프 아님)      <- PID 10초 유지
+재시작 정책 unless-stopped · StopTimeout=60(stop_grace_period 1m) · healthcheck healthy
+  -- 포트 --
+호스트 SEAWEEDFS_S3_PORT 수신 · S3 포트(8333)만 publish
+내부 포트(9333/8080/8888)가 컨테이너 IP 로 닿지 않음   <- -ip.bind=127.0.0.1
+  -- TLS --
+평문 HTTP 거부 · 이름으로 TLS 검증(CA, SNI) · IP 로 TLS 검증(SAN 에 IP 가 있을 때)
+telemetry 전송 로그 없음
+  -- S3 왕복 (aws-cli, CA 검증 켬) --
+접속 -> 버킷 생성 -> 업로드 5MB -> 업로드 20MB(멀티파트) -> 목록
+다운로드 sha256 일치 · 가상 호스트 스타일 목록
+잘못된 secret 거부 · 익명 요청 거부      <- 인증 오류로 거부됐는지까지 본다
+호스트 볼륨에 데이터 기록됨(*.dat)
+```
+
+7절 스모크 테스트 항목을 옮겼다. 다른 점은 다음과 같다.
+
+- "호스트 9333·8080·8888 미수신" 은 `docker port` 로 S3 포트만 publish 됐는지 본다.
+  호스트의 다른 프로세스가 8080 등을 써도 거짓 실패가 나지 않게 하기 위함이다.
+- "master 루프백 바인드" 는 컨테이너 IP 로 세 포트에 붙어 보는 것으로 바꿨다.
+- "SIGTERM 정상 종료(27초)" 는 판정에 넣지 않았다. `StopTimeout=60` 만 본다.
+- "재시작 후 객체 유지" 는 `--test-restart` 에 있다.
+
+aws-cli 는 번들 이미지로 `--network host` 와 `--add-host <이름>:127.0.0.1` 을 붙여 돌린다.
+실제 접속 이름으로 SNI·인증서를 검증하기 위함이다. 자격증명은 값 없는 `-e` 로 넘겨
+`ps` 에 남지 않게 한다.
+
+### 자동 복구
+
+```bash
+sudo ./install.sh --test-restart
+```
+
+| 단계 | 방법 | 확인 |
+|---|---|---|
+| 준비 | 검증용 버킷에 객체 하나 쓰기 | |
+| 프로세스 사고사 | 호스트에서 컨테이너 PID 에 `kill -9` | `RestartCount` 증가 + healthz |
+| 재부팅 대리 | `systemctl restart docker` | running 복귀 + healthz |
+| 객체 유지 | 준비 단계 객체를 다시 받기 | 내용 일치 |
+
+`docker kill` 로 시험하지 않는다. 수동 정지로 기록되어 `unless-stopped` 가 재시작하지
+않는다(`20-minio` 7절).
+
+### 아직 하지 않은 것
+
+- **실제 서버에서 `install.sh` 실행** — 에어갭 노드 설치와 판정 통과 확인
+- **`install.sh` 를 넣은 번들 다시 빌드**
 - **UiPath AS 연계 검증** — `uipathctl prereq run` 으로 `external_object_storage`
   를 SeaweedFS 로 지정해 확인해야 한다.
-- **에어갭 노드 설치** — 스모크 테스트는 온라인 빌드 호스트에서 했다.
 
 ---
 
 ## 7. 검증 상태
+
+### `install.sh`: 정적 검사만 했다
+
+**실제 서버나 VM 에서 `install.sh` 를 실행하지 않았다.** 판정 36항목, `--test-restart`,
+`--uninstall` 모두 실제로 돌려 본 적이 없다.
+
+| 검사 | 결과 |
+|---|---|
+| `bash -n install.sh` / `build-bundle.sh` | 통과 |
+| `shellcheck -x` (`install.sh`) | 경고 이상 0건. note 만 있다(SC2329 `check` 로 넘기는 함수, SC2015 `A && B \|\| C`). `20-minio/install.sh` 와 같은 종류다 |
+| compose 템플릿을 `install.sh` 의 sed 블록 그대로 치환 | 미치환 자리표시자 없음. 기본값 `"8333:8333"`, `/data/weed:/data`. 시험값 `"18333:8333"`, `-s3.port=8333`·healthcheck `localhost:8333` 그대로 |
+| 치환한 compose 를 `docker compose config` 로 파싱 | 통과 (클라이언트 쪽 파싱만) |
+| `s3.json` 템플릿 치환 후 `python3 -m json.tool` | 통과 |
+| `WEED_DATA_DIR` 키가 없는 `site.env` 로 `versions.env` + `install.sh` 의 기본값 줄 평가 | `/data/weed` |
+| 입력 검증 블록에 잘못된 포트·호스트명·경로·IP 를 넣어 실행 | 모두 멈춤. 정상값은 통과 |
+| 로컬 CA 발급 블록만 임시 디렉터리에서 실행(OpenSSL) | `openssl verify` OK, SAN 에 이름·와일드카드·IP·127.0.0.1 |
+
+### 템플릿 스모크 테스트 (`install.sh` 이전)
 
 2026-10-17, Ubuntu 26.04.1 LTS(resolute) 빌드 호스트.
 
@@ -210,5 +339,5 @@ S3(aws-cli, CA 검증 켬): 버킷 생성 / 업로드 5MB / 목록 / 다운로�
 ## 8. 다음 단계
 
 ```
-05-certs (weed 인증서) → [21-seaweedfs] install.sh 작성 → 에어갭 설치 → AS prereq 검증
+05-certs (weed 인증서) → [21-seaweedfs] 번들 재빌드 → 에어갭 설치(install.sh 첫 실행) → AS prereq 검증
 ```

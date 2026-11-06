@@ -62,7 +62,7 @@ flowchart TD
 | **인증서 (PKI)** | Internal CA | `05-certs/make-certs.sh` | OpenSSL 기반 사내 통합 CA 및 서비스별 SAN 인증서 |
 | **Storage (CSI)** | csi-driver-nfs **v4.13.4** | K8s CSI Driver + NFS Kernel Server | 기본 StorageClass: `nfs-csi` (동적 프로비저닝) |
 | **Object Storage** | MinIO `RELEASE.2025-09-07` | Docker Compose (SNSD 단일 노드) | S3 호환, TLS 적용. AGPL-3.0, quay.io 이미지 401(2026-10-17) |
-| **Object Storage (대안 검토)** | SeaweedFS **4.48** | Docker Compose (`weed server` 단일 노드) | Apache-2.0, S3 TLS 전용. 번들 빌드까지 검증, `install.sh` 미작성 |
+| **Object Storage (대안 검토)** | SeaweedFS **4.48** | Docker Compose (`weed server` 단일 노드) | Apache-2.0, S3 TLS 전용. 번들 빌드·템플릿 기동까지 검증, `install.sh` 는 작성했으나 실서버 미실행 |
 | **Registry** | Harbor **v2.15.2** | 공식 오프라인 인스톨러 + systemd | HTTPS(443) 전용, 자동 복구 스크립트 |
 | **L4 Load Balancer** | HAProxy **3.1** | Docker (`--network host`) | 80/443/15021 TCP 패스스루 |
 | **Database** | SQL Server 2022 (CU25/CU26) / PostgreSQL 16 | Docker 커스텀 이미지 / Docker Compose | MSSQL은 **Full-Text Search(FTS)** 내장 필수, PG는 TLS 적용 |
@@ -93,6 +93,7 @@ vi site.env
 - `HARBOR_HOSTNAME` / `HARBOR_PRIVATE_IP`: 사내 Harbor FQDN 및 IP (예: `harbor.myrobots.co.kr` / `10.32.99.4`)
 - `MINIO_HOSTNAME`: MinIO FQDN (예: `minio.myrobots.co.kr`)
 - `WEED_HOSTNAME` / `WEED_HOST_IP` / `WEED_ROOT_USER` / `WEED_ROOT_PASSWORD`: SeaweedFS(MinIO 대안) S3 접속 FQDN·IP 및 자격증명. `05-certs` 가 `*.<WEED_HOSTNAME>` 와일드카드 인증서를 발급
+- `WEED_DATA_DIR`: SeaweedFS S3 데이터 호스트 경로 (기본: `/data/weed`, 키가 없어도 이 값)
 - `AS_FQDN`: Automation Suite 서비스 FQDN (예: `as2510.myrobots.co.kr`, 하위 와일드카드 인증서 발급 대상)
 - `MSSQL_DATA_DIR` / `MSSQL_SA_PASSWORD` / `MSSQL_PID`: 외부 MSSQL 데이터 경로, SA 암호 및 에디션
 - `PG_DATA_DIR` / `PG_HOSTNAME` / `PG_PASSWORD`: 외부 PostgreSQL 데이터 경로(기본: `/data/postgresql`), 접속 FQDN 및 암호
@@ -106,7 +107,7 @@ vi site.env
 | 변수 | 기본값 | 컨테이너 포트 | 반영되는 곳 |
 |---|---|---|---|
 | `MINIO_PORT` | 9000 | 9000 | `20-minio/install.sh`. 웹 콘솔은 9001 고정. 이미 설치된 서버에서 바꾸면 `/opt/minio/minio.env` 의 `MINIO_SERVER_URL` 포트만 고치고 `minio.env.bak.<시각>` 백업을 남깁니다 |
-| `SEAWEEDFS_S3_PORT` | 8333 | 8333 | `21-seaweedfs` 는 `install.sh` 가 아직 없어 **지금은 BUNDLE-INFO 표기에만** 반영됩니다. compose 템플릿의 `__SEAWEEDFS_S3_PORT__` 는 앞으로 작성할 `install.sh` 가 치환합니다 |
+| `SEAWEEDFS_S3_PORT` | 8333 | 8333 | `21-seaweedfs/install.sh` (실제 서버에서 아직 실행하지 않음) |
 | `POSTGRES_PORT` | 5432 | 5432 | `80-postgresql/install.sh` |
 | `MSSQL_PORT` | 1433 | 1433 | `70-mssql/install.sh` |
 | `REDIS_PORT` | 6379 | 6379 | `45-redis/install.sh` |
@@ -370,8 +371,9 @@ sudo ./install.sh --check-only
 > [!NOTE]
 > **MinIO 대안 — SeaweedFS ([`21-seaweedfs`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/21-seaweedfs/README.md))**  
 > MinIO 는 AGPL-3.0 이고, 2026-10-17 기준 quay.io 이미지가 401 을 반환해 번들을 새로 만들 수 없습니다. Apache-2.0 인 SeaweedFS 4.48 을 대안으로 검토 중입니다.
-> 현재는 번들 빌드(`build-in-container.sh 26.04 21-seaweedfs`)와 `05-certs` 의 `weed` 인증서로 띄운 S3 TLS 왕복 스모크 테스트(27/27)까지 검증했고, `install.sh` 는 아직 없습니다.
-> 엔드포인트는 `https://<WEED_HOSTNAME>:<SEAWEEDFS_S3_PORT>`(기본 8333)입니다. `install.sh` 가 없는 지금은 `SEAWEEDFS_S3_PORT` 가 BUNDLE-INFO 표기에만 반영됩니다(2.1절).
+> 현재는 번들 빌드(`build-in-container.sh 26.04 21-seaweedfs`)와 `05-certs` 의 `weed` 인증서로 띄운 S3 TLS 왕복 스모크 테스트(27/27)까지 검증했습니다.
+> `install.sh`(`sudo ./install.sh`, `--check-only` / `--test-restart` / `--uninstall`)는 작성했지만 **실제 서버에서 아직 실행하지 않았습니다**(정적 검사만 함).
+> 엔드포인트는 `https://<WEED_HOSTNAME>:<SEAWEEDFS_S3_PORT>`(기본 8333)이고, 데이터는 `WEED_DATA_DIR`(기본 `/data/weed`)에 저장됩니다.
 
 ---
 

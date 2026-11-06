@@ -62,7 +62,7 @@ flowchart TD
 | **인증서 (PKI)** | Internal CA | `05-certs/make-certs.sh` | OpenSSL 기반 사내 통합 CA 및 서비스별 SAN 인증서 |
 | **Storage (CSI)** | csi-driver-nfs **v4.13.4** | K8s CSI Driver + NFS Kernel Server | 기본 StorageClass: `nfs-csi` (동적 프로비저닝) |
 | **Object Storage** | MinIO `RELEASE.2025-09-07` | Docker Compose (SNSD 단일 노드) | S3 호환, TLS 적용. AGPL-3.0, quay.io 이미지 401(2026-10-17) |
-| **Object Storage (대안 검토)** | SeaweedFS **4.48** | Docker Compose (`weed server` 단일 노드) | Apache-2.0, S3 TLS 전용. 번들 빌드·템플릿 기동까지 검증, `install.sh` 는 작성했으나 실서버 미실행 |
+| **Object Storage (대안)** | SeaweedFS **4.48** | Docker Compose (`weed server` 단일 노드) | Apache-2.0, S3 TLS 전용. 실서버에서 `install.sh` 판정 36/36 통과(4.3.1절). 사내 CA 인증서·브라우저 CORS 적용. AS 연계는 미검증 |
 | **Registry** | Harbor **v2.15.2** | 공식 오프라인 인스톨러 + systemd | HTTPS(443) 전용, 자동 복구 스크립트 |
 | **L4 Load Balancer** | HAProxy **3.1** | Docker (`--network host`) | 80/443/15021 TCP 패스스루 |
 | **Database** | SQL Server 2022 (CU25/CU26) / PostgreSQL 16 | Docker 커스텀 이미지 / Docker Compose | MSSQL은 **Full-Text Search(FTS)** 내장 필수, PG는 TLS 적용 |
@@ -94,6 +94,7 @@ vi site.env
 - `MINIO_HOSTNAME`: MinIO FQDN (예: `minio.myrobots.co.kr`)
 - `WEED_HOSTNAME` / `WEED_HOST_IP` / `WEED_ROOT_USER` / `WEED_ROOT_PASSWORD`: SeaweedFS(MinIO 대안) S3 접속 FQDN·IP 및 자격증명. `05-certs` 가 `*.<WEED_HOSTNAME>` 와일드카드 인증서를 발급
 - `WEED_DATA_DIR`: SeaweedFS S3 데이터 호스트 경로 (기본: `/data/weed`, 키가 없어도 이 값)
+- `WEED_CORS_ORIGINS`: 브라우저가 SeaweedFS S3 를 직접 호출할 때 허용할 오리진(쉼표 구분, 예: `https://as.example.internal`). 비우면 `https://<AS_FQDN>` 을 씁니다. `*` 를 넣으면 `install.sh` 가 멈춥니다
 - `AS_FQDN`: Automation Suite 서비스 FQDN (예: `as2510.myrobots.co.kr`, 하위 와일드카드 인증서 발급 대상)
 - `MSSQL_DATA_DIR` / `MSSQL_SA_PASSWORD` / `MSSQL_PID`: 외부 MSSQL 데이터 경로, SA 암호 및 에디션
 - `PG_DATA_DIR` / `PG_HOSTNAME` / `PG_PASSWORD`: 외부 PostgreSQL 데이터 경로(기본: `/data/postgresql`), 접속 FQDN 및 암호
@@ -107,7 +108,7 @@ vi site.env
 | 변수 | 기본값 | 컨테이너 포트 | 반영되는 곳 |
 |---|---|---|---|
 | `MINIO_PORT` | 9000 | 9000 | `20-minio/install.sh`. 웹 콘솔은 9001 고정. 이미 설치된 서버에서 바꾸면 `/opt/minio/minio.env` 의 `MINIO_SERVER_URL` 포트만 고치고 `minio.env.bak.<시각>` 백업을 남깁니다 |
-| `SEAWEEDFS_S3_PORT` | 8333 | 8333 | `21-seaweedfs/install.sh` (실제 서버에서 아직 실행하지 않음) |
+| `SEAWEEDFS_S3_PORT` | 8333 | 8333 | `21-seaweedfs/install.sh` |
 | `POSTGRES_PORT` | 5432 | 5432 | `80-postgresql/install.sh` |
 | `MSSQL_PORT` | 1433 | 1433 | `70-mssql/install.sh` |
 | `REDIS_PORT` | 6379 | 6379 | `45-redis/install.sh` |
@@ -370,10 +371,54 @@ sudo ./install.sh --check-only
 
 > [!NOTE]
 > **MinIO 대안 — SeaweedFS ([`21-seaweedfs`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/21-seaweedfs/README.md))**  
-> MinIO 는 AGPL-3.0 이고, 2026-10-17 기준 quay.io 이미지가 401 을 반환해 번들을 새로 만들 수 없습니다. Apache-2.0 인 SeaweedFS 4.48 을 대안으로 검토 중입니다.
-> 현재는 번들 빌드(`build-in-container.sh 26.04 21-seaweedfs`)와 `05-certs` 의 `weed` 인증서로 띄운 S3 TLS 왕복 스모크 테스트(27/27)까지 검증했습니다.
-> `install.sh`(`sudo ./install.sh`, `--check-only` / `--test-restart` / `--uninstall`)는 작성했지만 **실제 서버에서 아직 실행하지 않았습니다**(정적 검사만 함).
-> 엔드포인트는 `https://<WEED_HOSTNAME>:<SEAWEEDFS_S3_PORT>`(기본 8333)이고, 데이터는 `WEED_DATA_DIR`(기본 `/data/weed`)에 저장됩니다.
+> MinIO 는 AGPL-3.0 이고, 2026-10-17 기준 quay.io 이미지가 401 을 반환해 번들을 새로 만들 수 없습니다. Apache-2.0 인 SeaweedFS 4.48 을 대안으로 씁니다. 설치 방식은 MinIO 와 같습니다.
+>
+> ```bash
+> tar xzf seaweedfs-4.48.tar.gz
+> cd seaweedfs-4.48
+>
+> sudo ./install.sh                   # 설치 + 판정 36항목
+> sudo ./install.sh --check-only      # 판정만
+> sudo ./install.sh --test-restart    # 자동 복구 검증
+>
+> # AS 버킷을 만든 뒤 브라우저 CORS 적용
+> sudo ./apply-cors.sh charles-as-bucket
+> sudo ./apply-cors.sh --show charles-as-bucket
+> ```
+>
+> - **엔드포인트:** `https://<WEED_HOSTNAME>:<SEAWEEDFS_S3_PORT>` (기본 8333, **HTTPS 전용** — 평문 요청은 거부됩니다)
+> - **자격증명 확인:** `/opt/weed/weed.env` (0600). `WEED_ROOT_PASSWORD` 를 비워 두면 설치가 무작위 생성해 출력합니다
+> - **데이터:** `WEED_DATA_DIR` (기본 `/data/weed`)
+> - **내부 포트:** master(9333) / volume(8080) / filer(8888) 는 인증이 없어 공개하지 않습니다. S3(8333) 만 호스트에 노출됩니다
+> - **버킷 CORS:** 브라우저가 S3 를 직접 호출하면(AS 파일 업로드 등) CORS 가 필요합니다. 허용 오리진은 `site.env` 의 `WEED_CORS_ORIGINS` 이고, 서버 전역(`-s3.allowedOrigins`)은 `install.sh` 가, 버킷 규칙은 `apply-cors.sh` 가 넣습니다. **두 계층이 모두 필요합니다** — 4.48 은 버킷 규칙만 두면 슬래시 없는 `OPTIONS /<버킷>` 에서 전역 기본값 `*` 가 그대로 나갑니다([seaweedfs#12025](https://github.com/seaweedfs/seaweedfs/issues/12025)). 자세한 내용은 `21-seaweedfs/README.md` 5절
+> - **가상 호스트 스타일:** `-s3.domainName` 으로 `<버킷>.<WEED_HOSTNAME>` 주소를 받습니다. `05-certs` 가 `*.<WEED_HOSTNAME>` 와일드카드를 발급하므로 클라이언트 DNS(또는 `/etc/hosts`)에서 그 이름도 같은 IP 로 풀려야 합니다
+
+#### 4.3.1 SeaweedFS 검증 상태
+
+2026-11-06 기준, 실제 서버(Ubuntu 26.04, Docker 29.9.3 + compose v5.7.0, deb 설치)에서 확인한 결과입니다.
+
+| 항목 | 결과 |
+|---|---|
+| 번들 빌드 (`21-seaweedfs/build-bundle.sh`) | 통과. 산출물 315MB, 번들 파일 17개, `SHA256SUMS` 전체 일치 |
+| `install.sh` 판정 | **36/36 통과** |
+| └ S3 왕복 | 5MB 업로드, 20MB 멀티파트, 다운로드 sha256 일치, 가상 호스트 스타일 목록 |
+| └ 인증 | 잘못된 secret 거부, 익명 요청 거부 |
+| └ 포트 격리 | 8333 만 publish, 9333/8080/8888 외부 차단 |
+| └ TLS | 평문 HTTP 거부, 이름(SNI)·IP(SAN) 양쪽 검증 |
+| └ 인증서 | `05-certs` 사내 CA 발급본(`/opt/pki/weed` → `/opt/weed/certs`) 사용 확인 |
+| 브라우저 CORS | 통과. 허용 오리진만 200 + 정확한 `Access-Control-Allow-Origin`, 그 외 403 (전역·버킷 2계층, preflight 실측) |
+| `--test-restart` / `--uninstall` | 미검증. 설치·판정은 통과했지만 이 두 모드는 아직 돌려 보지 않았습니다 |
+| **UiPath AS 연계** | **미검증.** `uipathctl prereq run` 으로 `external_object_storage` 를 SeaweedFS 로 지정한 확인이 남아 있습니다 |
+
+> [!IMPORTANT]
+> **Docker 는 deb 패키지로 설치해야 합니다.** snap 으로 설치하면 compose CLI 가 샌드박스에 갇혀 `/opt` 와 `/tmp` 를 보지 못하고, `/opt/weed/docker-compose.yml` 을 읽을 때 파일이 있는데도 아래처럼 실패합니다.
+>
+> ```
+> compose file "/opt/weed/docker-compose.yml.new" is invalid:
+>   open /opt/weed/docker-compose.yml.new: no such file or directory
+> ```
+>
+> `which docker` 가 `/snap/bin/docker` 면 이 경우입니다. `/opt` 아래 compose 로 기동하는 다른 단계(`20-minio`, `30-harbor` 등)도 같은 증상이 납니다. `10-k8s` 가 설치하는 deb 기반 docker(`docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-compose-plugin`)를 쓰십시오.
 
 ---
 

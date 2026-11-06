@@ -1,13 +1,14 @@
-# 21-seaweedfs — SeaweedFS S3 오브젝트 스토리지 (MinIO 대안 검토)
+# 21-seaweedfs — SeaweedFS S3 오브젝트 스토리지 (MinIO 대안)
 
-`20-minio` 의 라이선스 대안으로 검토 중인 S3 호환 오브젝트 스토리지다.
+`20-minio` 의 라이선스 대안으로 쓰는 S3 호환 오브젝트 스토리지다.
 단일 노드 `weed server`(master + volume + filer + S3 게이트웨이를 한 프로세스로)
 구성이고, S3 API 는 사내 CA 인증서로 TLS 전용이다. 컨테이너명은 `seaweedfs` 다.
 
-**현재 상태: 번들 빌드 + 템플릿 기동 검증 완료, `install.sh` 작성(6절).
-`install.sh` 는 실제 서버에서 아직 실행하지 않았다. 정적 검사만 했다(7절).**
-Ubuntu 26.04 빌드 호스트에서 번들 빌드와 S3 왕복 스모크 테스트 27/27 을
-확인했다(7절). 이 스모크 테스트는 `install.sh` 가 아니라 템플릿을 손으로 치환해 했다.
+**현재 상태: 실서버에서 `install.sh` 판정 36/36 통과(7절).**
+2026-11-06, Ubuntu 26.04 / Docker 29.9.3 + compose v5.7.0(deb) 호스트에서 확인했다.
+인증서는 `05-certs` 사내 CA 발급본(`/opt/pki/weed`)을 쓰고, 브라우저 CORS 는
+전역·버킷 2계층을 적용해 preflight 를 실측했다(5절).
+남은 것은 UiPath AS 연계 검증이다(6절 "아직 하지 않은 것").
 
 ---
 
@@ -79,8 +80,8 @@ seaweedfs-4.48/
 인증서는 번들에 넣지 않는다. `05-certs` 가 발급하고(`out/weed/`) `deploy-certs.sh`
 가 각 노드 `/opt/pki/weed/` 에 둔다. 없으면 `install.sh` 가 로컬 CA 로 발급한다(6절).
 
-위 산출물 크기와 트리는 `install.sh` 를 넣기 전 빌드(2026-10-17)의 것이다. 지금은
-`install.sh` 가 함께 실린다. `install.sh` 를 넣은 뒤에는 번들을 다시 빌드해 보지 않았다.
+위 트리는 2026-11-06 재빌드 기준이다. 파일 17개, tar.gz 315MB 이고
+`sha256sum -c SHA256SUMS` 가 전체 일치한다. `install.sh` 와 `apply-cors.sh` 가 함께 실린다.
 
 ---
 
@@ -232,8 +233,13 @@ sudo ./apply-cors.sh --show <버킷이름>  # 적용된 설정만 확인
 
 ## 6. 설치 (`install.sh`)
 
-> **`install.sh` 는 실제 서버나 VM 에서 아직 실행하지 않았다.** 문법 검사, shellcheck,
-> 템플릿 치환 결과 확인 같은 정적 검사만 했다(7절). 아래 판정 항목도 실제로 통과한 적이 없다.
+> `install.sh` 는 실서버에서 판정 36항목을 모두 통과했다(7절). `--test-restart` 와
+> `--uninstall` 은 아직 돌려 보지 않았다.
+>
+> **전제: docker 는 deb 패키지여야 한다.** snap docker 는 compose CLI 가 샌드박스에
+> 갇혀 `/opt` 를 보지 못해, 파일이 있는데도 `compose file "/opt/weed/docker-compose.yml.new"
+> is invalid: ... no such file or directory` 로 실패한다. `which docker` 가
+> `/snap/bin/docker` 면 이 경우다.
 
 ```bash
 # 빌드 호스트(인터넷 O)
@@ -331,19 +337,38 @@ sudo ./install.sh --test-restart
 
 ### 아직 하지 않은 것
 
-- **실제 서버에서 `install.sh` 실행** — 에어갭 노드 설치와 판정 통과 확인
-- **`install.sh` 를 넣은 번들 다시 빌드**
 - **UiPath AS 연계 검증** — `uipathctl prereq run` 으로 `external_object_storage`
-  를 SeaweedFS 로 지정해 확인해야 한다.
+  를 SeaweedFS 로 지정해 확인해야 한다. 가장 중요한 남은 항목이다.
+- **`--test-restart` / `--uninstall` 실행** — 설치·판정은 통과했지만 이 두 모드는
+  아직 돌려 보지 않았다.
+- **에어갭 노드에서 설치** — 확인한 호스트는 인터넷이 닿는 상태였다. 번들만으로
+  설치되는지는 `90-verify/airgap-on.sh` 를 켜고 확인해야 한다.
 
 ---
 
 ## 7. 검증 상태
 
-### `install.sh`: 정적 검사만 했다
+### `install.sh`: 실서버 판정 36/36 통과
 
-**실제 서버나 VM 에서 `install.sh` 를 실행하지 않았다.** 판정 36항목, `--test-restart`,
-`--uninstall` 모두 실제로 돌려 본 적이 없다.
+2026-11-06, Ubuntu 26.04 / Docker 29.9.3 + compose v5.7.0(deb) 호스트에서 `sudo ./install.sh`
+를 실행해 판정 36항목을 모두 통과했다.
+
+| 항목 | 결과 |
+|---|---|
+| `sudo ./install.sh` | **통과 36 / 실패 0** |
+| S3 왕복 | 5MB 업로드, 20MB 멀티파트, 다운로드 sha256 일치, 가상 호스트 스타일 목록 |
+| 인증 | 잘못된 secret 거부, 익명 요청 거부 |
+| 포트 격리 | 8333 만 publish. 9333 / 8080 / 8888 는 컨테이너 밖에서 닿지 않음 |
+| TLS | 평문 HTTP 거부. 이름(SNI)·IP(SAN) 양쪽 검증 |
+| 인증서 | `OU=weed, CN=weed.<도메인>`, issuer = 사내 CA. 로컬 CA 폴백이 아님 |
+| CORS preflight | 허용 오리진 200 + 정확한 `Access-Control-Allow-Origin`, 그 외 403 |
+| 번들 재빌드 | `build-bundle.sh` 통과. 파일 17개, 315MB, `SHA256SUMS` 전체 일치 |
+
+`--test-restart`, `--uninstall`, AS 연계는 아직 확인하지 않았다(6절 "아직 하지 않은 것").
+
+#### 실행 전에 했던 정적 검사
+
+아래는 실서버 실행 이전에 한 검사다. 기록으로 남긴다.
 
 | 검사 | 결과 |
 |---|---|

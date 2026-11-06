@@ -63,10 +63,12 @@ pg_pw() { grep -E '^POSTGRES_PASSWORD=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-; 
 #
 # 비밀번호는 -W 나 인자가 아니라 PGPASSWORD 환경변수로 넘긴다.
 # 인자로 넘기면 호스트의 ps 출력에 노출된다.
+#
+#   psqlq "<SQL>" [DB]     # DB 를 생략하면 postgres DB 에 붙는다
 #=====================================================================
 psqlq() {
     docker exec -e PGPASSWORD="$(pg_pw)" "$CONTAINER" \
-        psql -h 127.0.0.1 -U "$PG_SUPERUSER" -d postgres -tAc "$1"
+        psql -h 127.0.0.1 -U "$PG_SUPERUSER" -d "${2:-postgres}" -tAc "$1"
 }
 
 # TLS 로 붙었는지까지 확인하는 질의. sslmode=require 를 명시한다.
@@ -114,17 +116,29 @@ run_checks() {
     check "pg_isready" retry_until 120 bash -c "docker exec '$CONTAINER' pg_isready -U '${PG_SUPERUSER}' -d postgres"
     check "psql 접속" retry_until 120 psqlq "SELECT 1"
 
-    local ver ssl_on pw_enc chk
+    local ver ssl_on pw_enc chk max_conn btree_avail btree_t1
     ver="$(psqlq "SHOW server_version" 2>/dev/null | tr -d '\r' | head -1)"
     ssl_on="$(psqlq "SHOW ssl" 2>/dev/null | tr -d '\r' | head -1)"
     pw_enc="$(psqlq "SHOW password_encryption" 2>/dev/null | tr -d '\r' | head -1)"
     chk="$(psqlq "SHOW data_checksums" 2>/dev/null | tr -d '\r' | head -1)"
-    log "버전=${ver:-?} / ssl=${ssl_on:-?} / password_encryption=${pw_enc:-?} / data_checksums=${chk:-?}"
+    max_conn="$(psqlq "SHOW max_connections" 2>/dev/null | tr -d '\r' | head -1)"
+    log "버전=${ver:-?} / ssl=${ssl_on:-?} / password_encryption=${pw_enc:-?} / data_checksums=${chk:-?} / max_connections=${max_conn:-?}"
 
     # AS 의 temporal-sql-tool 이 SQL_TLS=true 로 붙는다. ssl=off 면 실패한다.
     check "ssl=on (AS 의 SQL_TLS=true 요구)" bash -c "[[ '${ssl_on}' == 'on' ]]"
     check "password_encryption=scram-sha-256" bash -c "[[ '${pw_enc}' == 'scram-sha-256' ]]"
     check "data_checksums=on" bash -c "[[ '${chk}' == 'on' ]]"
+    # 기대값은 build-bundle.sh 의 compose 템플릿(max_connections=300)과 같아야 한다.
+    # 값을 바꾸면 두 곳을 함께 고친다.
+    check "max_connections=300" bash -c "[[ '${max_conn}' == '300' ]]"
+
+    # btree_gin 은 설치 5단계가 template1 에 넣는다. 이미지에 확장 파일이 있는지와
+    # template1 에 실제로 들어갔는지를 따로 본다.
+    btree_avail="$(psqlq "SELECT default_version FROM pg_available_extensions WHERE name = 'btree_gin'" 2>/dev/null | tr -d '\r' | head -1)"
+    btree_t1="$(psqlq "SELECT extversion FROM pg_extension WHERE extname = 'btree_gin'" template1 2>/dev/null | tr -d '\r' | head -1)"
+    log "btree_gin: 사용 가능 버전=${btree_avail:-없음} / template1 설치 버전=${btree_t1:-없음}"
+    check "btree_gin 사용 가능(이미지에 포함)" test -n "$btree_avail"
+    check "template1 에 btree_gin 설치됨" test -n "$btree_t1"
 
     #--- TLS 로 실제 접속되는지 -----------------------------------------
     # SHOW ssl 은 "서버가 TLS 를 켰다"까지만 알려준다. 실제로 TLS 세션이
@@ -142,6 +156,13 @@ run_checks() {
 
     psqlq "DROP DATABASE IF EXISTS ${SMOKE_DB}" >/dev/null 2>&1 || true
     check "DB 생성" psqlq "CREATE DATABASE ${SMOKE_DB}"
+    # TEMPLATE 을 지정하지 않은 CREATE DATABASE 는 template1 을 복사한다.
+    # 새 DB 가 btree_gin 을 물려받는지 끝까지 확인한다.
+    check "새 DB 가 template1 의 btree_gin 을 물려받음" bash -c "
+        docker exec -e PGPASSWORD='$(pg_pw)' '$CONTAINER' \
+          psql -h 127.0.0.1 -U '${PG_SUPERUSER}' -d '${SMOKE_DB}' -tAc \
+          \"SELECT extname FROM pg_extension WHERE extname = 'btree_gin'\" 2>/dev/null \
+          | tr -d '\r' | grep -qx btree_gin"
     check "테이블 생성 및 INSERT" bash -c "
         docker exec -e PGPASSWORD='$(pg_pw)' '$CONTAINER' \
           psql -h 127.0.0.1 -U '${PG_SUPERUSER}' -d '${SMOKE_DB}' -tAc \
@@ -357,7 +378,39 @@ fi
 ok "PostgreSQL 기동 및 pg_isready 확인"
 
 #=====================================================================
-# 5. 판정
+# 5. 확장 설치 (template1 에 btree_gin)
+#
+# CREATE DATABASE 는 TEMPLATE 을 지정하지 않으면 template1 을 복사한다.
+# 그래서 template1 에 넣어 두면 이후 만드는 DB(AS 의 AutomationSuite_* 포함)가
+# btree_gin 을 갖고 만들어진다. 이미 있는 DB, template0 로 만드는 DB,
+# initdb 때 만들어진 postgres DB 에는 들어가지 않는다(README 3절, 9절).
+#
+# IF NOT EXISTS 이므로 재실행하면 NOTICE 만 나오고 넘어간다.
+#=====================================================================
+step "확장 설치 (template1 에 btree_gin)"
+
+# 최초 기동 때는 위 pg_isready 가 통과해도 TCP 접속이 아직 안 될 수 있다.
+# 공식 이미지는 initdb 중 임시 서버를 Unix 소켓에서만 띄우고, pg_isready 는
+# 소켓으로 확인하기 때문이다. psqlq 는 127.0.0.1(TCP)로 붙으므로 먼저 기다린다.
+retry_until 120 psqlq "SELECT 1" \
+    || die "127.0.0.1:5432 로 psql 접속이 되지 않는다. docker logs ${CONTAINER} 를 확인할 것."
+
+if ! ext_out="$(psqlq "CREATE EXTENSION IF NOT EXISTS btree_gin" template1 2>&1)"; then
+    die "$(cat <<MSG
+template1 에 btree_gin 을 설치하지 못했다.
+${ext_out}
+
+흔한 원인:
+  - 이미지에 확장 파일이 없다
+      ERROR: extension "btree_gin" is not available
+    -> 이미지에 PostgreSQL contrib 확장이 들어 있는지 확인할 것
+MSG
+)"
+fi
+ok "template1 에 btree_gin 설치 (CREATE EXTENSION IF NOT EXISTS)"
+
+#=====================================================================
+# 6. 판정
 #=====================================================================
 run_checks
 rc=$?

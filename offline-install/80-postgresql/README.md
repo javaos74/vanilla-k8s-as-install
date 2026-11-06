@@ -3,7 +3,9 @@
 UiPath Automation Suite 일부 구성요소용 PostgreSQL. TLS 활성, 5432 수신.
 컨테이너명은 `postgres` 다.
 
-Ubuntu 22.04 에어갭 노드에서 **판정 25/25 통과**를 확인했다(7절).
+Ubuntu 22.04 에어갭 노드에서 이전 번들로 **판정 25/25 통과**를 확인했다(7절).
+`template1` 의 `btree_gin` 과 `max_connections=300` 을 더한 지금의 판정 29항목은
+실제 서버에서 아직 실행하지 않았다. 정적 검사만 했다(7절).
 
 > Harbor 는 내장 PostgreSQL(`harbor-db`)을 쓰므로 이 단계와 무관하다.
 > `30-harbor` 를 위해 이 단계를 설치할 필요는 없다.
@@ -60,11 +62,13 @@ FATAL: private key file "/etc/postgresql/certs/server.key" has group or world ac
 
 ## 3. 설정 값과 근거
 
-`command:` 로 넘기는 값들이다. 운영 중인 환경에서 검증된 조합이다.
+`command:` 로 넘기는 값들이다. 운영 중인 환경에서는 `max_connections=200` 으로
+검증한 조합이다. `max_connections` 는 그 뒤 300 으로 올렸고 실제 서버에서는 아직
+검증하지 않았다(7절).
 
 | 항목 | 값 | 근거 |
 |---|---|---|
-| `max_connections` | 200 | AS 구성요소가 다수의 커넥션을 연다 |
+| `max_connections` | 300 | AS 구성요소가 다수의 커넥션을 연다. 200 에서 올렸다. 정렬·해시 연산 하나가 `work_mem` 까지 쓰므로 연결 300 개가 연산을 하나씩만 해도 최대 약 4.7GB 다. 호스트 메모리를 함께 본다. 서버 시작 때만 바뀐다(9절) |
 | `shared_buffers` | 2GB | `shm_size: 1gb` 와 함께 조정. 공유 메모리가 부족하면 기동 실패 |
 | `effective_cache_size` | 6GB | 플래너 힌트. 실제 할당이 아니다 |
 | `work_mem` / `maintenance_work_mem` | 16MB / 512MB | |
@@ -75,6 +79,31 @@ FATAL: private key file "/etc/postgresql/certs/server.key" has group or world ac
 
 `PGDATA` 를 볼륨 루트가 아니라 하위 디렉터리(`data/pgdata`)로 둔다. 볼륨 루트에
 바로 초기화하면 `lost+found` 같은 항목이 있을 때 `initdb` 가 거부한다.
+
+### `template1` 에 `btree_gin` 을 넣는다
+
+AS 의 PostgreSQL DB 에 `btree_gin` 확장이 있어야 한다. 참고로 업스트림 Temporal 의
+PostgreSQL visibility 스키마가 `btree_gin` 을 쓴다.
+
+`install.sh` 는 기동 직후 `template1` 에서 다음을 실행한다.
+
+```sql
+CREATE EXTENSION IF NOT EXISTS btree_gin;
+```
+
+`CREATE DATABASE` 는 `TEMPLATE` 을 지정하지 않으면 `template1` 을 복사한다. 그래서
+이후 만드는 DB 는 모두 `btree_gin` 을 갖고 만들어진다. AS 가 만드는
+`AutomationSuite_*` 만이 아니라 9절의 `uipath_db` 같은 다른 DB 도 마찬가지다.
+
+다음 DB 에는 들어가지 않는다.
+
+- 이미 있던 DB. `template1` 은 복사하는 시점의 내용만 넘긴다. 9절의 수동 절차를 쓴다
+- `TEMPLATE template0` 로 만드는 DB. AS 설치기가 어느 template 을 쓰는지는 확인하지
+  못했다. AS 가 DB 를 만든 뒤 9절의 확인 절차로 본다
+- initdb 때 만들어진 `postgres` DB
+
+`btree_gin` 은 PostgreSQL contrib 확장이다. 이미지에 확장 파일이 없으면 설치 단계가
+`extension "btree_gin" is not available` 로 멈춘다.
 
 ---
 
@@ -109,7 +138,7 @@ sudo ./install.sh
 
 ---
 
-## 5. 판정 25항목
+## 5. 판정 29항목
 
 ```
 docker / compose 사용 가능 · 이미지 적재됨
@@ -119,14 +148,21 @@ compose 파일 · env(0600) · 인증서 · 데이터 디렉터리 · compose �
 인증서가 컨테이너 uid(999) 소유 · server.key 0600 · SAN 에 접속 이름 포함
 pg_isready · psql 접속
 ssl=on (AS 의 SQL_TLS=true 요구)
-password_encryption=scram-sha-256 · data_checksums=on
+password_encryption=scram-sha-256 · data_checksums=on · max_connections=300
+btree_gin 사용 가능(이미지에 포함) · template1 에 btree_gin 설치됨
   -- TLS 접속 --
 sslmode=require 로 접속 성공
 세션이 실제로 암호화됨(pg_stat_ssl)
   -- DB 왕복 --
-DB 생성 -> 테이블·INSERT -> SELECT 값 확인
+DB 생성 -> 새 DB 가 template1 의 btree_gin 을 물려받음
+테이블·INSERT -> SELECT 값 확인
 호스트 볼륨에 데이터 기록됨
 ```
+
+이전 번들(판정 25항목)로 설치한 서버에서 새 번들의 `--check-only` 를 먼저 실행하면
+`max_connections=300`, `template1 에 btree_gin 설치됨`, `새 DB 가 template1 의 btree_gin 을
+물려받음` 이 FAIL 이고 종료 코드가 1 이다. `--check-only` 는 설치 단계를 실행하지 않기
+때문이다. 반영 방법은 9절에 있다.
 
 ### `SHOW ssl` 만으로 판정하지 않는다
 
@@ -165,7 +201,25 @@ SIGKILL 이후에는 crash recovery 가 돌아가므로 응답까지 시간이 �
 
 ## 7. 검증 상태
 
-2026-09-23 에 Ubuntu 22.04 에어갭 노드에서 수행했다.
+### `template1` 의 `btree_gin` · `max_connections=300` 변경: 정적 검사만 했다
+
+**실제 서버나 VM 에서 설치를 실행하지 않았다.** 다음은 확인하지 않았다.
+
+- 판정 29항목 통과 여부
+- 이미지에 `btree_gin` 확장 파일이 들어 있는지
+- AS 설치기가 `template1` 로 DB 를 만드는지
+- `max_connections=300` 에서 호스트 메모리가 충분한지
+
+| 검사 | 결과 |
+|---|---|
+| `bash -n` (`install.sh`, `build-bundle.sh`) | 통과 |
+| `shellcheck -x -S warning` (두 파일) | 새 경고 없음. 기존 `install.sh` 22행 SC1090 1건만 남음 |
+| `build-bundle.sh` 의 compose 템플릿 생성 부분만 네트워크 없이 실행 | 템플릿에 `max_connections=300` 확인 |
+| `run_checks()` 의 `check` 호출 수 | 29. 5절 목록과 같음 |
+
+### 이전 번들 (판정 25항목, `max_connections=200`)
+
+2026-09-23 에 Ubuntu 22.04 에어갭 노드에서 수행했다. 이 결과는 위 변경 전 번들의 것이다.
 
 | 항목 | 결과 |
 |---|---|
@@ -203,6 +257,9 @@ password_encryption=scram-sha-256 / data_checksums=on
 | `password authentication failed` (구 클라이언트) | `scram-sha-256` 미지원 클라이언트 | 클라이언트를 올린다. `md5` 로 내리지 말 것 |
 | `data_checksums=off` 인데 켜고 싶다 | initdb 시점에만 가능 | 덤프 후 재초기화 필요 |
 | 호스트명이 `postgres.` 처럼 나온다 | `hostname -d` 가 빈 문자열 | 7절 1번. 고쳐졌다. `site.env` 의 `PG_HOSTNAME` 로 명시 권장 |
+| 설치가 `extension "btree_gin" is not available` 로 멈춘다 | 이미지에 확장 파일이 없다 | 이미지에 PostgreSQL contrib 확장이 들어 있는지 확인. 판정의 `btree_gin 사용 가능` 항목 |
+| `--check-only` 에서 `max_connections=300` 이나 `btree_gin` 항목이 FAIL | 이전 번들로 설치한 서버 | 9절 "이미 설치된 서버에 반영하기" |
+| `AutomationSuite_*` DB 에 `btree_gin` 이 없다 | `template1` 에 넣기 전에 만들어졌거나 `template0` 로 만들어졌다 | 9절 "이미 있는 `AutomationSuite_*` DB 에 넣기" |
 
 로그: `docker logs postgres` · `docker compose -f /opt/postgresql/docker-compose.yml logs`
 
@@ -224,6 +281,83 @@ CREATE DATABASE uipath_db OWNER uipath;
 
 클라이언트가 CA 를 검증해야 하는 경우에만 `/opt/postgresql/certs/server.crt` 를
 배포한다. AS 는 검증하지 않으므로 보통 필요하지 않다.
+
+아래 명령의 `-U postgres` 는 `PG_SUPERUSER` 를 바꿨다면 그 이름으로 바꾼다. 컨테이너
+안의 Unix 소켓으로 붙으므로 비밀번호를 묻지 않는다.
+
+### 이미 설치된 서버에 반영하기
+
+이전 번들(`max_connections=200`, `template1` 에 확장 없음)로 설치한 서버에는 두 변경이
+없다. **AS 가 DB 를 만들기 전에** 반영해야 새 DB 가 `btree_gin` 을 물려받는다.
+
+표준 절차는 새 번들로 `install.sh` 를 다시 실행하는 것이다. **점검 시간에 한다.**
+
+```bash
+sudo ./install.sh
+```
+
+- 데이터, `postgres.env`, 인증서는 그대로 쓴다
+- compose 파일이 바뀌므로 기존 파일을 `docker-compose.yml.bak.<시각>` 으로 백업하고 교체한다
+- `docker compose up -d` 가 컨테이너를 다시 만든다. **PostgreSQL 이 재시작되어 접속 중인
+  연결이 모두 끊긴다.** `max_connections` 는 서버 시작 때만 바뀌고, `-c` 로 넘기는 값이라
+  `ALTER SYSTEM` 으로는 바꿀 수 없다
+- 이어서 설치 단계가 `template1` 에 `btree_gin` 을 넣고 판정 29항목을 실행한다
+
+지금 재시작할 수 없는데 AS 가 곧 DB 를 만들어야 한다면 `template1` 만 먼저 넣는다.
+재시작이 필요 없다.
+
+```bash
+sudo docker exec postgres psql -U postgres -d template1 -v ON_ERROR_STOP=1 \
+  -c 'CREATE EXTENSION IF NOT EXISTS btree_gin'
+```
+
+이때 `max_connections` 는 200 그대로이고 `--check-only` 의 `max_connections=300` 항목은
+FAIL 로 남는다. 점검 시간에 위의 `install.sh` 재실행으로 반영한다.
+
+`template1` 에 대화형 세션을 열어 둔 채로 두지 않는다. `template1` 에 다른 세션이 붙어
+있으면 `CREATE DATABASE` 가 실패한다. 위처럼 `psql -c` 로 실행하면 바로 끊긴다.
+
+어느 방법이든 이미 있는 DB 에는 들어가지 않는다. 다음 절차를 따로 한다.
+
+### 이미 있는 `AutomationSuite_*` DB 에 넣기
+
+`install.sh` 는 이미 있는 DB 를 고치지 않는다. `template1` 에 넣기 전에 만들어진 DB 나
+`TEMPLATE template0` 로 만들어진 DB 에는 직접 넣는다.
+
+대상은 이름이 `AutomationSuite_` 로 시작하는 DB 다. 대소문자를 구분하고 `_` 도 글자
+그대로 비교하므로 `starts_with` 를 쓴다. `LIKE` 에서 `_` 는 아무 한 글자이고, `ILIKE` 는
+대소문자를 구분하지 않는다.
+
+DB 이름은 짐작해 적지 말고 서버에서 조회한다. 예를 들어 TaaS DB 는 출처에 따라
+`AutomationSuite_TaaS` 와 `AutomationSuite_Taas` 두 표기가 있고, 실제 서버에서 확인하지
+않았다. 따옴표 없이 만든 DB 라면 이름이 소문자라 아래 조건에 걸리지 않는다. 1) 의 결과가
+비어 있으면 `sudo docker exec postgres psql -U postgres -l` 로 전체 목록을 본다.
+
+```bash
+# 1) 대상 확인
+sudo docker exec postgres psql -U postgres -d postgres -tAc \
+  "SELECT datname FROM pg_database WHERE starts_with(datname, 'AutomationSuite_') ORDER BY 1"
+
+# 2) DB 마다 설치. 이미 있으면 NOTICE 만 나오고 넘어간다.
+sudo docker exec postgres psql -U postgres -d postgres -tAc \
+  "SELECT datname FROM pg_database WHERE starts_with(datname, 'AutomationSuite_') ORDER BY 1" |
+while IFS= read -r db; do
+  echo "== ${db}"
+  sudo docker exec postgres psql -U postgres -d "$db" -v ON_ERROR_STOP=1 \
+    -c 'CREATE EXTENSION IF NOT EXISTS btree_gin' </dev/null
+done
+
+# 3) 확인. DB 마다 btree_gin 버전이 나와야 한다. 비어 있으면 설치되지 않은 것이다.
+sudo docker exec postgres psql -U postgres -d postgres -tAc \
+  "SELECT datname FROM pg_database WHERE starts_with(datname, 'AutomationSuite_') ORDER BY 1" |
+while IFS= read -r db; do
+  printf '%s\t%s\n' "$db" "$(sudo docker exec postgres psql -U postgres -d "$db" -tAc \
+    "SELECT extversion FROM pg_extension WHERE extname = 'btree_gin'" </dev/null)"
+done
+```
+
+AS 의 `uipathctl prereq create` 가 새로 만든 DB 도 3) 으로 확인한다. 버전이 비어 있으면
+설치기가 `template1` 이 아닌 template 으로 만든 것이므로 2) 를 실행한다.
 
 ---
 

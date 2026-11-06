@@ -391,7 +391,7 @@ sudo ./install.sh --check-only     # Deployment·APIService·kubectl top·imageI
 |---|---|---|
 | **L4 Load Balancer** | [`40-haproxy`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/40-haproxy/README.md) | 호스트의 `80`, `443`, `15021` 포트를 인그레스 게이트웨이 NodePort로 패스스루 (`--network host`, `--restart unless-stopped`). Worker 노드에는 설치하지 않음. |
 | **SQL Server** | [`70-mssql`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/70-mssql/README.md) | **Full-Text Search(FTS)**가 내장된 커스텀 이미지(`mssql-fts:2022`) 필수 실행. 공식 MS 이미지에는 FTS가 없어 AS 설치 실패. 포트 1433. |
-| **PostgreSQL** | [`80-postgresql`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/80-postgresql/README.md) | PostgreSQL 16 컨테이너, TLS 적용, 포트 5432 (Data Service 등 요구 시). |
+| **PostgreSQL** | [`80-postgresql`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/80-postgresql/README.md) | PostgreSQL 16 컨테이너, TLS 적용, 포트 5432 (Data Service 등 요구 시). `template1`에 `btree_gin`을 설치해 이후 만드는 DB가 확장을 물려받음. |
 | **Redis Cache** | [`45-redis`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/45-redis/README.md) | Redis OSS 단일 노드 (TLS 리스너, 포트 6379, 데이터 디렉터리 `/data/redis`). |
 
 ### 4.6 (선택) 임베딩 서비스 ([`85-ollama-embedding`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/85-ollama-embedding/README.md))
@@ -528,6 +528,9 @@ uipathctl prereq run input.json --versions versions.json
 uipathctl prereq create input.json --versions versions.json
 ```
 
+> [!NOTE]
+> 외부 PostgreSQL은 [`80-postgresql`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/80-postgresql/README.md)이 `template1`에 `btree_gin`을 넣어 둡니다. 이 단계에서 설치기가 `template1`로 만드는 DB는 확장을 물려받습니다. 설치기가 어느 template을 쓰는지는 확인하지 않았으므로, 생성 뒤 `AutomationSuite_*` DB에 확장이 있는지 확인합니다. 이 단계보다 먼저 만들어진 DB에는 직접 넣어야 합니다. 절차: [`80-postgresql/README.md` §9](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/80-postgresql/README.md)
+
 ---
 
 ### 5.5 Automation Suite 배포 실행
@@ -596,6 +599,7 @@ sudo ./90-verify/airgap-off.sh
 | **Worker 노드가 영구 `NotReady`** | Worker 노드에 Cilium CNI 컨테이너 이미지가 적재되지 않음 | Worker 노드에서 `sudo ./60-cilium/install.sh --role worker` 실행 |
 | **PVC 상태가 `Pending` 또는 마운트 실패 (`Operation not permitted`)** | NFS export 옵션에 `insecure`가 없거나 StorageClass에 `noresvport`가 누락/충돌됨 | NFS 서버의 `/etc/exports`에 `insecure` 추가, StorageClass 삭제 후 `mountOptions` 재확인 및 재생성 |
 | **Harbor 재부팅 후 443 접속 불가 (`Connection refused`)** | Docker 데몬이 컨테이너 순서(`harbor-log`의 1514 포트 리스너 준비)를 기다리지 않고 동시 기동함 | `sudo systemctl restart harbor.service` 실행 ([`30-harbor/conf/harbor-start.sh`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/30-harbor/conf/harbor-start.sh) 순차 기동 보장) |
+| **PostgreSQL의 `AutomationSuite_*` DB에 `btree_gin` 없음** | `template1`에 확장을 넣기 전에 만들어졌거나 `template0`로 만들어짐. `template1` 변경은 이후 만드는 DB에만 복사됨 | 이름이 `AutomationSuite_`로 시작하는 DB마다 `CREATE EXTENSION IF NOT EXISTS btree_gin` 실행. 절차: [`80-postgresql/README.md` §9](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/80-postgresql/README.md) |
 | **MSSQL 사전 점검 실패 (`Full-Text Search not installed`)** | MS 공식 mssql 이미지를 사용하여 FTS 서비스가 누락됨 | [`70-mssql/fts-image`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/70-mssql/fts-image)에서 빌드된 `mssql-fts:2022` 이미지로 교체 |
 | **`kubectl top nodes` 메트릭 수집 불가** | Metrics Server의 kubelet serving 인증서 검증 실패 | [`metrics-server/components.yaml`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/metrics-server/components.yaml)에 `--kubelet-insecure-tls` 및 `--kubelet-preferred-address-types=InternalIP` 플래그 추가 |
 | **AS 설치 후 또는 maintenance 해제 뒤 특정 노드의 pod 다수가 `CrashLoopBackOff`** (죽는 컨테이너는 `istio-proxy`, 로그에 `inotify_fd_ >= 0` / `couldn't initialize inotify: too many open files`) | 노드의 `fs.inotify.max_user_instances`가 기본값 128이라 istio-proxy(uid 1337)가 한도를 다 씀. Redis 인증서 오류처럼 보일 수 있지만 무관함 | 지금 `10-k8s/install.sh`는 설치 때 control plane·worker 모두에 `fs.inotify.max_user_instances=8192`, `fs.inotify.max_user_watches=1048576`을 넣는다(`/etc/sysctl.d/99-inotify.conf`). 그 전 번들로 설치한 노드는 모든 노드에 같은 파일을 직접 넣어 적용한 뒤 크래시 pod 삭제. 상세: [`10-k8s/README.md` §7.1](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/10-k8s/README.md), Redis 점검 절차: [`45-redis/README.md`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/45-redis/README.md) |

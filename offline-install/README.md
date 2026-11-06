@@ -62,7 +62,7 @@ flowchart TD
 | **인증서 (PKI)** | Internal CA | `05-certs/make-certs.sh` | OpenSSL 기반 사내 통합 CA 및 서비스별 SAN 인증서 |
 | **Storage (CSI)** | csi-driver-nfs **v4.13.4** | K8s CSI Driver + NFS Kernel Server | 기본 StorageClass: `nfs-csi` (동적 프로비저닝) |
 | **Object Storage** | MinIO `RELEASE.2025-09-07` | Docker Compose (SNSD 단일 노드) | S3 호환, TLS 적용. AGPL-3.0, quay.io 이미지 401(2026-10-17) |
-| **Object Storage (대안)** | SeaweedFS **4.48** | Docker Compose (`weed server` 단일 노드) | Apache-2.0, S3 TLS 전용. 실서버에서 `install.sh` 판정 36/36 통과(4.3.1절). 사내 CA 인증서·브라우저 CORS 적용. AS 연계는 미검증 |
+| **Object Storage (대안)** | SeaweedFS **4.48** | Docker Compose (`weed server` 단일 노드) | Apache-2.0, S3 TLS 전용. 실서버에서 `install.sh` 판정 36/36 통과(4.3.1절). 사내 CA 인증서·브라우저 CORS 적용. AS 연계는 미검증. 판정 수정(`data_written`)을 더한 지금 코드는 미실행 |
 | **Registry** | Harbor **v2.15.2** | 공식 오프라인 인스톨러 + systemd | HTTPS(443) 전용, 자동 복구 스크립트 |
 | **L4 Load Balancer** | HAProxy **3.1** | Docker (`--network host`) | 80/443/15021 TCP 패스스루 |
 | **Database** | SQL Server 2022 (CU25/CU26) / PostgreSQL 16 | Docker 커스텀 이미지 / Docker Compose | MSSQL은 **Full-Text Search(FTS)** 내장 필수, PG는 TLS 적용 |
@@ -94,7 +94,7 @@ vi site.env
 - `MINIO_HOSTNAME`: MinIO FQDN (예: `minio.myrobots.co.kr`)
 - `WEED_HOSTNAME` / `WEED_HOST_IP` / `WEED_ROOT_USER` / `WEED_ROOT_PASSWORD`: SeaweedFS(MinIO 대안) S3 접속 FQDN·IP 및 자격증명. `05-certs` 가 `*.<WEED_HOSTNAME>` 와일드카드 인증서를 발급
 - `WEED_DATA_DIR`: SeaweedFS S3 데이터 호스트 경로 (기본: `/data/weed`, 키가 없어도 이 값)
-- `WEED_CORS_ORIGINS`: 브라우저가 SeaweedFS S3 를 직접 호출할 때 허용할 오리진(쉼표 구분, 예: `https://as.example.internal`). 비우면 `https://<AS_FQDN>` 을 씁니다. `*` 를 넣으면 `install.sh` 가 멈춥니다
+- `WEED_CORS_ORIGINS`: 브라우저가 SeaweedFS S3 를 직접 호출할 때 허용할 오리진(쉼표 구분, 예: `https://as.example.internal`). 비우면 `https://<AS_FQDN>` 을 씁니다. `*` 를 넣으면 `install.sh` 가 멈춥니다. `AS_FQDN` 도 비어 있으면 멈춥니다
 - `AS_FQDN`: Automation Suite 서비스 FQDN (예: `as2510.myrobots.co.kr`, 하위 와일드카드 인증서 발급 대상)
 - `MSSQL_DATA_DIR` / `MSSQL_SA_PASSWORD` / `MSSQL_PID`: 외부 MSSQL 데이터 경로, SA 암호 및 에디션
 - `PG_DATA_DIR` / `PG_HOSTNAME` / `PG_PASSWORD`: 외부 PostgreSQL 데이터 경로(기본: `/data/postgresql`), 접속 FQDN 및 암호
@@ -108,7 +108,7 @@ vi site.env
 | 변수 | 기본값 | 컨테이너 포트 | 반영되는 곳 |
 |---|---|---|---|
 | `MINIO_PORT` | 9000 | 9000 | `20-minio/install.sh`. 웹 콘솔은 9001 고정. 이미 설치된 서버에서 바꾸면 `/opt/minio/minio.env` 의 `MINIO_SERVER_URL` 포트만 고치고 `minio.env.bak.<시각>` 백업을 남깁니다 |
-| `SEAWEEDFS_S3_PORT` | 8333 | 8333 | `21-seaweedfs/install.sh` |
+| `SEAWEEDFS_S3_PORT` | 8333 | 8333 | `21-seaweedfs/install.sh`. 2026-11-06 `charles-weed` VM 에서 CORS 추가 전 코드로 28333 으로 바꿔 설치해 확인했습니다(`21-seaweedfs/README.md` 7절) |
 | `POSTGRES_PORT` | 5432 | 5432 | `80-postgresql/install.sh` |
 | `MSSQL_PORT` | 1433 | 1433 | `70-mssql/install.sh` |
 | `REDIS_PORT` | 6379 | 6379 | `45-redis/install.sh` |
@@ -127,7 +127,7 @@ Harbor 는 포트 변수가 없습니다. HTTPS 443 고정이며 HTTPS 로만 �
 4. **네트워크**: 클라우드 보안그룹·NSG, 상위 방화벽·LB 규칙. 대상 `install.sh` 는 호스트 방화벽(firewalld/ufw)을 건드리지 않습니다.
 
 > [!NOTE]
-> 기본값이 아닌 포트로 실제 서버에서 설치해 본 적은 없습니다. 문법 검사와 템플릿 렌더링 검사까지만 했습니다.
+> 기본값이 아닌 포트로 실제로 설치해 확인한 것은 SeaweedFS(`SEAWEEDFS_S3_PORT=28333`, 2026-11-06 `charles-weed` VM, CORS 추가 전 코드)뿐입니다. 나머지는 문법 검사와 템플릿 렌더링 검사까지만 했습니다.
 
 ### 2.2 컨테이너 환경에서 번들 빌드
 
@@ -395,6 +395,16 @@ sudo ./install.sh --check-only
 
 #### 4.3.1 SeaweedFS 검증 상태
 
+검증한 코드는 세 범위로 나뉩니다(자세한 내용은 `21-seaweedfs/README.md` 7절).
+
+| 범위 | 검증한 코드 | 결과 |
+|---|---|---|
+| ① 테스트 VM `charles-weed` (2026-11-06, Ubuntu 24.04.5, Docker 29.8.1, 로컬 CA 인증서) | CORS 추가 전 코드 + `data_written` 판정 수정 | 번들 tar 만으로 36/36, 재실행 멱등성, `SEAWEEDFS_S3_PORT=28333`, `--test-restart`, `--uninstall` 통과 |
+| ② 실서버 (아래 표) | CORS 포함 코드, `data_written` 수정 전 판정 | 36/36, CORS preflight 실측 |
+| ③ 지금 코드 | CORS + `data_written` 수정 | **한 번도 실행하지 않았습니다** |
+
+②의 36/36 중 "호스트 볼륨에 데이터 기록됨" 은 수정 전 조건(0바이트보다 큰 `*.dat` 가 하나라도 있으면 통과)으로 낸 결과입니다. 수정 후에는 판정 버킷의 `<버킷>_*.dat` 합계가 20MB 이상이어야 통과하므로 더 엄격합니다.
+
 2026-11-06 기준, 실제 서버(Ubuntu 26.04, Docker 29.9.3 + compose v5.7.0, deb 설치)에서 확인한 결과입니다.
 
 | 항목 | 결과 |
@@ -407,7 +417,7 @@ sudo ./install.sh --check-only
 | └ TLS | 평문 HTTP 거부, 이름(SNI)·IP(SAN) 양쪽 검증 |
 | └ 인증서 | `05-certs` 사내 CA 발급본(`/opt/pki/weed` → `/opt/weed/certs`) 사용 확인 |
 | 브라우저 CORS | 통과. 허용 오리진만 200 + 정확한 `Access-Control-Allow-Origin`, 그 외 403 (전역·버킷 2계층, preflight 실측) |
-| `--test-restart` / `--uninstall` | 미검증. 설치·판정은 통과했지만 이 두 모드는 아직 돌려 보지 않았습니다 |
+| `--test-restart` / `--uninstall` | 미검증. 설치·판정은 통과했지만 이 두 모드는 아직 돌려 보지 않았습니다(①의 VM 에서는 CORS 추가 전 코드로 통과) |
 | **UiPath AS 연계** | **미검증.** `uipathctl prereq run` 으로 `external_object_storage` 를 SeaweedFS 로 지정한 확인이 남아 있습니다 |
 
 > [!IMPORTANT]

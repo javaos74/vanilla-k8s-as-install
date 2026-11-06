@@ -19,7 +19,9 @@
 # 비밀번호가 비어 있으면 무작위 생성해 /opt/weed/weed.env(0600)에 저장하고 출력한다.
 #
 # 2026-11-06 Ubuntu 24.04.5 VM(Docker 29.8.1)에서 번들 tar 만으로 설치·판정·재실행·
-# 포트 변경·자동 복구·제거를 실기 검증했다(README 7절).
+# 포트 변경·자동 복구·제거를 실기 검증했다. CORS(WEED_CORS_ORIGINS, -s3.allowedOrigins)를
+# 넣기 전 코드로 한 것이다. CORS 를 넣은 코드는 실서버(Ubuntu 26.04)에서 설치·판정했지만
+# data_written 수정 전이다. 지금 코드 그대로는 아직 실행하지 않았다(README 7절).
 #---------------------------------------------------------------------
 BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${BUNDLE_ROOT}/00-common/common.sh"

@@ -18,7 +18,8 @@
 # 자격증명은 site.env 의 WEED_ROOT_USER / WEED_ROOT_PASSWORD 를 쓴다.
 # 비밀번호가 비어 있으면 무작위 생성해 /opt/weed/weed.env(0600)에 저장하고 출력한다.
 #
-# 이 스크립트는 실제 서버에서 아직 실행하지 않았다. 정적 검사만 했다(README 7절).
+# 2026-11-06 Ubuntu 24.04.5 VM(Docker 29.8.1)에서 번들 tar 만으로 설치·판정·재실행·
+# 포트 변경·자동 복구·제거를 실기 검증했다(README 7절).
 #---------------------------------------------------------------------
 BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${BUNDLE_ROOT}/00-common/common.sh"
@@ -174,9 +175,16 @@ internal_ports_closed() {
     return 0
 }
 
-# 호스트 볼륨에 볼륨 파일(.dat)이 실제로 생겼는지.
+# 판정 버킷의 객체가 호스트 볼륨에 실제로 기록됐는지.
+# SeaweedFS 는 버킷마다 같은 이름의 컬렉션을 만들고 볼륨 파일을
+# WEED_DATA_DIR/<버킷>_<id>.dat 로 둔다(실측). 빈 볼륨도 8바이트(superblock)짜리 .dat 로
+# 미리 만들어지므로 "*.dat 가 있다" 만으로는 객체가 기록됐는지 알 수 없다(실측: 8.dat~14.dat).
+# 그래서 판정 버킷 볼륨 파일의 합계가 올린 20MB 객체 이상인지 본다.
 data_written() {
-    [[ -n "$(find "$WEED_DATA_DIR" -type f -name '*.dat' -size +0 -print -quit 2>/dev/null)" ]]
+    local total
+    total="$(find "$WEED_DATA_DIR" -type f -name "${SMOKE_BUCKET}_*.dat" -printf '%s\n' 2>/dev/null \
+        | awk '{s += $1} END {print s + 0}')"
+    ((total >= 20 * 1024 * 1024))
 }
 
 #=====================================================================
@@ -287,7 +295,7 @@ run_checks() {
     check "잘못된 secret 거부"        s3_denied --secret "wrong-secret-${RANDOM}${RANDOM}" s3 ls "s3://${SMOKE_BUCKET}/"
     check "익명 요청 거부"            s3_denied --no-sign-request s3 ls "s3://${SMOKE_BUCKET}/"
     # 데이터가 호스트 볼륨에 실제로 떨어졌는지. 컨테이너 안에만 있으면 재생성 시 사라진다.
-    check "호스트 볼륨에 데이터 기록됨" data_written
+    check "호스트 볼륨에 데이터 기록됨(${SMOKE_BUCKET}_*.dat)" data_written
 
     # 정리. 실패해도 판정에 영향을 주지 않는다.
     smoke_cleanup

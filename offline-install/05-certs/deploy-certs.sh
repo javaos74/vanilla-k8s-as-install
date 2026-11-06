@@ -72,8 +72,17 @@ run_checks() {
             test -f "/etc/docker/certs.d/${REGISTRY_HOST}/ca.crt"
         # containerd 쪽. k8s 이미지 pull 에 영향을 주는 것은 이쪽이다.
         if [[ -f /etc/containerd/config.toml ]]; then
-            check "containerd config_path 설정됨" bash -c "
-                grep -qE \"config_path\\s*=\\s*'${CONTAINERD_CERTS_D}'\" /etc/containerd/config.toml"
+            # CRI registry 섹션이 있을 때만 config_path 를 따진다.
+            # containerd.io 기본 설정은 disabled_plugins=["cri"] 라 그 섹션이 없고,
+            # 10-k8s 가 containerd 를 설정한 뒤에 생긴다. 없는 상태를 실패로 세면
+            # k8s 설치 전에는 이 판정이 늘 실패한다(적용부도 같은 조건으로 건너뛴다).
+            if grep -qE "\[plugins\.['\"](io\.containerd\.cri\.v1\.images|io\.containerd\.grpc\.v1\.cri)['\"]\.registry\]" \
+                 /etc/containerd/config.toml; then
+                check "containerd config_path 설정됨" bash -c "
+                    grep -qE \"config_path\\s*=\\s*'${CONTAINERD_CERTS_D}'\" /etc/containerd/config.toml"
+            else
+                log "containerd 에 CRI registry 섹션이 없다 - config_path 판정 해당 없음(10-k8s 전)"
+            fi
             check "containerd 신뢰: certs.d/${REGISTRY_HOST}/hosts.toml" \
                 test -f "${CONTAINERD_CERTS_D}/${REGISTRY_HOST}/hosts.toml"
             check "containerd 서비스 active" systemctl is-active --quiet containerd
@@ -140,7 +149,9 @@ EOF
         else
             cp -a /etc/containerd/config.toml \
                   "/etc/containerd/config.toml.bak.$(date +%Y%m%d-%H%M%S)"
-            python3 - "$CONTAINERD_CERTS_D" <<'PY' || die "containerd config 수정 실패"
+            # 종료코드 3 = CRI registry 섹션 없음(아래에서 건너뛴다).
+            set +e
+            python3 - "$CONTAINERD_CERTS_D" <<'PY'
 import re, sys
 path = "/etc/containerd/config.toml"
 certs_d = sys.argv[1]
@@ -154,7 +165,10 @@ for name in ("io.containerd.cri.v1.images", "io.containerd.grpc.v1.cri"):
         sec = m
         break
 if not sec:
-    sys.exit("registry 섹션을 찾지 못했다")
+    # CRI 가 꺼져 있으면(10-k8s 전, containerd.io 기본값은 disabled_plugins=["cri"])
+    # 이 섹션이 아예 없다. 실패가 아니라 "아직 할 일이 없음" 이다.
+    # 호출부가 구분할 수 있도록 전용 종료코드로 끝낸다.
+    sys.exit(3)
 
 # 그 섹션 이후 **다음 섹션 헤더 전까지** 범위에서만 config_path 를 바꾼다.
 start = sec.end()
@@ -170,11 +184,25 @@ if n == 0:
 open(path, "w").write(s[:start] + new_block + s[end:])
 print("config_path 설정 완료")
 PY
-            systemctl restart containerd || die "containerd 재시작 실패"
-            # 소켓이 열릴 때까지 기다린다. 바로 ctr 을 쓰면 실패한다.
-            retry_until 60 ctr version >/dev/null 2>&1 \
-                || die "containerd 가 기동되지 않았다: journalctl -u containerd"
-            ok "config_path 설정 및 containerd 재시작"
+            _cd_rc=$?
+            set -e
+            if ((_cd_rc == 3)); then
+                # containerd 가 아직 CRI 용으로 설정되지 않았다. certs.d 와
+                # hosts.toml 은 위에서 배치했으니, 10-k8s 가 containerd 를 설정한
+                # 뒤 이 스크립트를 다시 실행하면 config_path 가 켜진다.
+                # 여기서 멈추면 아래 4단계(/opt/pki)까지 막혀 다른 서비스가 모두
+                # 인증서를 못 받는다. 그래서 경고만 남기고 넘어간다.
+                warn "containerd 에 CRI registry 섹션이 없어 config_path 를 건너뛴다."
+                warn "  10-k8s 로 containerd 를 설정한 뒤 이 스크립트를 다시 실행할 것."
+            elif ((_cd_rc != 0)); then
+                die "containerd config 수정 실패"
+            else
+                systemctl restart containerd || die "containerd 재시작 실패"
+                # 소켓이 열릴 때까지 기다린다. 바로 ctr 을 쓰면 실패한다.
+                retry_until 60 ctr version >/dev/null 2>&1 \
+                    || die "containerd 가 기동되지 않았다: journalctl -u containerd"
+                ok "config_path 설정 및 containerd 재시작"
+            fi
         fi
     fi
 

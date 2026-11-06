@@ -87,6 +87,12 @@ EOF
 # 조합이다. max_connections 는 그 뒤 300 으로 올렸고 실제 서버에서는 아직
 # 검증하지 않았다(README 7절).
 # 각 항목의 근거는 아래 주석과 README 에 있다.
+#
+# ports 의 왼쪽(__POSTGRES_PORT__)은 호스트 포트로, site.env 의 POSTGRES_PORT
+# (기본 5432)를 install.sh 가 치환한다. 오른쪽 5432 는 컨테이너 안의 PostgreSQL
+# 포트이며 고정이다. healthcheck 와 install.sh 의 docker exec 접속도 5432 를 쓴다.
+# 템플릿 안의 "5432 를 인터넷에 열지 말 것" 주석은 기본값 렌더링 결과를 바꾸지
+# 않으려고 그대로 둔다. 호스트 포트를 바꿨다면 POSTGRES_PORT 로 읽는다.
 #=====================================================================
 step "compose 템플릿 생성"
 
@@ -244,7 +250,7 @@ built_on      : $(hostname)
 target_os     : Ubuntu 22.04 / 24.04 공용 (OS 의존 없음)
 image         : ${POSTGRES_IMAGE}
 digest        : ${POSTGRES_IMAGE_DIGEST}
-포트          : ${POSTGRES_PORT}
+포트          : ${POSTGRES_PORT} (호스트) -> 5432 (컨테이너)
 TLS           : 활성 (자가서명). AS 의 SQL_TLS=true 요구를 충족
 인증          : scram-sha-256
 재시작 정책   : unless-stopped

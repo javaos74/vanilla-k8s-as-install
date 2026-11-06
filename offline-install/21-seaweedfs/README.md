@@ -89,19 +89,22 @@ command:
   - -master.telemetry=false    # 외부 통계 전송 끔
   - -s3
   - -s3.ip.bind=0.0.0.0        # S3 만 밖으로
-  - -s3.port=8333
+  - -s3.port=8333               # 컨테이너 안 S3 포트. 고정
   - -s3.config=/etc/seaweedfs/s3.json
   - -s3.cert.file=/certs/weed.crt
   - -s3.key.file=/certs/weed.key
   - -s3.domainName=<WEED_HOSTNAME>
-ports: ["8333:8333"]
+ports: ["<SEAWEEDFS_S3_PORT>:8333"]   # 호스트 포트만 변수(기본 8333)
 stop_grace_period: 1m
 ```
 
 각 값의 이유(전부 실측):
 
-- **포트는 8333 하나만 연다.** master(9333) / volume(8080) / filer(8888) 에는
+- **포트는 S3 하나만 연다.** master(9333) / volume(8080) / filer(8888) 에는
   인증이 없어서, 공개하면 S3 자격증명을 우회해 파일을 읽고 지울 수 있다.
+- **S3 포트는 컨테이너 안에서 8333 고정이고, 호스트 포트만 `SEAWEEDFS_S3_PORT` 로
+  바꾼다.** `-s3.port` 와 healthcheck(`https://localhost:8333/healthz`)는 8333 그대로다.
+  템플릿의 `__SEAWEEDFS_S3_PORT__` 는 ports 왼쪽 한 곳뿐이다(5절, 6절).
 - **`-s3.cert.file` 을 주면 `-s3.port` 는 HTTPS 전용이 된다.** 평문 HTTP 요청은
   실패한다. 평문 포트를 따로 열려면 `-s3.port.https` 를 써야 하는데 쓰지 않는다.
 - **`-volume.max=0`.** 이미지 entrypoint 가 `-master.volumeSizeLimitMB=1024` 를
@@ -140,10 +143,16 @@ root 소유 0600 이라 그대로 마운트하면 읽지 못한다.
 | `WEED_HOST_IP` | 인증서 SAN 의 IP. 비우면 이름으로만 검증된다 |
 | `WEED_ROOT_USER` | `s3.json` 의 accessKey |
 | `WEED_ROOT_PASSWORD` | `s3.json` 의 secretKey. 비워 두는 것을 권장(무작위 생성 예정) |
+| `SEAWEEDFS_S3_PORT` | 호스트에 노출할 S3 API(HTTPS) 포트. 기본 8333. 컨테이너 안은 8333 고정 |
 
-`versions.env` 의 `SEAWEEDFS_S3_PORT`(8333), `SEAWEEDFS_UID`(1000),
-`SEAWEEDFS_REGION`(기본 `MINIO_REGION` 과 같음)도 쓴다. SeaweedFS 는 리전을
-검사하지 않지만 UiPath AS 등 S3 클라이언트가 리전을 요구한다.
+`versions.env` 의 `SEAWEEDFS_UID`(1000), `SEAWEEDFS_REGION`(기본 `MINIO_REGION` 과
+같음)도 쓴다. SeaweedFS 는 리전을 검사하지 않지만 UiPath AS 등 S3 클라이언트가 리전을
+요구한다.
+
+**`SEAWEEDFS_S3_PORT` 가 지금 반영되는 곳은 번들의 `BUNDLE-INFO` 표기뿐이다.**
+`install.sh` 가 아직 없어서(6절) compose 템플릿의 `__SEAWEEDFS_S3_PORT__` 를 치환하는
+코드가 없다. 템플릿을 손으로 치환해 띄울 때는 이 자리에 호스트 포트를 넣는다.
+`site.env` 에 키가 없으면 `versions.env` 의 기본값 8333 이 쓰인다.
 
 ---
 
@@ -152,6 +161,8 @@ root 소유 0600 이라 그대로 마운트하면 읽지 못한다.
 - **`install.sh`** — 이미지 적재, `/opt/weed` 생성, 템플릿 치환, 소유권, 기동,
   판정. 4절의 소유권과 7절의 판정 항목을 그대로 옮기면 된다. 빌드는
   `install.sh` 가 없으면 경고하고 이미지·템플릿만 담는다.
+  포트는 `__SEAWEEDFS_S3_PORT__` 를 `SEAWEEDFS_S3_PORT` 로 치환하고, 다른 컴포넌트와
+  같은 입력 검증(1~65535 숫자)·선점 확인·호스트 수신 판정을 넣는다.
 - **UiPath AS 연계 검증** — `uipathctl prereq run` 으로 `external_object_storage`
   를 SeaweedFS 로 지정해 확인해야 한다.
 - **에어갭 노드 설치** — 스모크 테스트는 온라인 빌드 호스트에서 했다.
@@ -186,6 +197,10 @@ S3(aws-cli, CA 검증 켬): 버킷 생성 / 업로드 5MB / 목록 / 다운로�
 종료: telemetry 로그 없음 / stop_grace_period / SIGTERM 정상 종료(27초, exit 0)
 재시작 후 객체 유지
 ```
+
+위 스모크 테스트는 S3 포트를 컨테이너 8333 고정으로 나누기 전의 템플릿으로 했다.
+나눈 뒤에는 다시 띄워 보지 않았다. 기본값 8333 으로 렌더링한 결과가 나누기 전과 같다는
+것만 정적으로 확인했다.
 
 검증 중 고친 것: `-volume.max=0`(entrypoint 의 1GB 볼륨), `-master.telemetry=false`
 (`-telemetry` 는 기동 실패), `stop_grace_period: 1m`(10초 SIGKILL).

@@ -1,6 +1,7 @@
 # 80-postgresql — PostgreSQL 오프라인 설치 (TLS 활성)
 
-UiPath Automation Suite 일부 구성요소용 PostgreSQL. TLS 활성, 5432 수신.
+UiPath Automation Suite 일부 구성요소용 PostgreSQL. TLS 활성.
+호스트 포트 `POSTGRES_PORT`(기본 5432)로 노출하고, 컨테이너 안에서는 5432 를 수신한다.
 컨테이너명은 `postgres` 다.
 
 Ubuntu 22.04 에어갭 노드에서 이전 번들로 **판정 25/25 통과**를 확인했다(7절).
@@ -133,6 +134,12 @@ sudo ./install.sh
 | `PG_SUPERUSER` | `postgres` |
 | `PG_TZ` | `Asia/Seoul` |
 | `PG_DATA_DIR` | 호스트 데이터 경로 `/data/postgresql`; 컨테이너의 `/var/lib/postgresql/data`에 마운트. 실제 PGDATA는 하위 `pgdata` |
+| `POSTGRES_PORT` | `5432`. 호스트에 노출할 포트. 컨테이너 안의 PostgreSQL 은 5432 고정이다 |
+
+`POSTGRES_PORT` 는 compose 의 `"<POSTGRES_PORT>:5432"` 왼쪽만 바꾼다. healthcheck 와
+`install.sh` 의 `docker exec … psql -h 127.0.0.1` 은 컨테이너 안 5432 로 붙는다.
+`install.sh` 는 1~65535 범위의 숫자가 아니면 멈춘다. 바꾸면 AS `input.json` 도 함께
+맞춘다(9절, [`offline-install/README.md`](../README.md) 2.1절).
 
 번들 크기는 145MB 다.
 
@@ -144,7 +151,7 @@ sudo ./install.sh
 docker / compose 사용 가능 · 이미지 적재됨
 compose 파일 · env(0600) · 인증서 · 데이터 디렉터리 · compose 문법
 컨테이너 실행 중(크래시 루프 아님)      <- PID 10초 유지
-재시작 정책 unless-stopped · 호스트 5432 수신
+재시작 정책 unless-stopped · 호스트 POSTGRES_PORT(기본 5432) 수신
 인증서가 컨테이너 uid(999) 소유 · server.key 0600 · SAN 에 접속 이름 포함
 pg_isready · psql 접속
 ssl=on (AS 의 SQL_TLS=true 요구)
@@ -268,10 +275,13 @@ password_encryption=scram-sha-256 / data_checksums=on
 ## 9. UiPath Automation Suite 연계
 
 ```
-postgresql://<user>@<PG_HOSTNAME>:5432/<db>?sslmode=require
+postgresql://<user>@<PG_HOSTNAME>:<POSTGRES_PORT>/<db>?sslmode=require
 ```
 
 - **TLS 필수** (`SQL_TLS=true`). 자가서명으로 충분하다(2절)
+- **포트**: `POSTGRES_PORT`(기본 5432)를 바꿨다면 AS `input.json` 의 `postgresql.port` 와
+  `postgresql_connection_string_template_sqlalchemy_pyodbc` / `_asyncpg` 의
+  `@<host>:<포트>/` 를 같은 값으로 맞춘다
 - **슈퍼유저를 직접 쓰지 말 것.** AS 전용 롤과 DB 를 만든다
 
 ```sql

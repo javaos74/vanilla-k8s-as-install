@@ -1,7 +1,8 @@
 # 70-mssql — SQL Server 2022 (Full-Text Search 포함) 오프라인 설치
 
 UiPath Automation Suite 가 요구하는 외부 SQL Server. **Full-Text Search 포함.**
-컨테이너명은 `mssql` 이고 1433 을 수신한다.
+컨테이너명은 `mssql` 이다. 호스트 포트 `MSSQL_PORT`(기본 1433)로 노출하고,
+컨테이너 안에서는 1433 을 수신한다.
 
 Ubuntu 22.04 에어갭 노드에서 **판정 19/19 통과**를 확인했다(8절).
 
@@ -171,6 +172,13 @@ sudo ./install.sh                                 # 최초 기동은 DB 생성�
 | `MSSQL_MEM_LIMIT` | `4g` |
 | `MSSQL_DATA_DIR` | 호스트 데이터 경로 `/data/mssql`; 컨테이너의 `/var/opt/mssql`에 마운트 |
 | `MSSQL_COLLATION` | `versions.env` 에 있다. AS 가 요구하는 값 |
+| `MSSQL_PORT` | `1433`. 호스트에 노출할 포트. 컨테이너 안의 SQL Server 는 1433 고정이다 |
+
+`MSSQL_PORT` 는 compose 의 `"<MSSQL_PORT>:1433"` 왼쪽만 바꾼다. `MSSQL_TCP_PORT` 나
+`mssql.conf` 의 `tcpport` 는 쓰지 않으므로 healthcheck 와 `install.sh` 의
+`docker exec … sqlcmd -S localhost` 는 컨테이너 안 1433 으로 붙는다.
+`install.sh` 는 1~65535 범위의 숫자가 아니면 멈춘다. 바꾸면 AS `input.json` 도 함께
+맞춘다(10절, [`offline-install/README.md`](../README.md) 2.1절).
 
 ### 기동을 막는 세 가지
 
@@ -215,7 +223,7 @@ SQL Server 는 아래 조건을 만족하지 못하면 **기동 직후 종료되
 docker / compose 사용 가능 · 이미지 적재됨
 compose 파일 · env 파일(0600) · 데이터 디렉터리 · compose 문법
 컨테이너 실행 중(크래시 루프 아님)      <- PID 10초 유지
-재시작 정책 unless-stopped · 호스트 1433 수신 · sqlcmd 존재
+재시작 정책 unless-stopped · 호스트 MSSQL_PORT(기본 1433) 수신 · sqlcmd 존재
 sa 로 SQL 접속
 Full-Text Search 설치됨(IsFullTextInstalled=1)    <- 이 단계의 존재 이유
 collation 이 SQL_Latin1_General_CP1_CI_AS
@@ -363,6 +371,11 @@ SQL Server 자체 로그는 `/data/mssql/log/errorlog` 다.
   `site.env` 의 `MSSQL_PID` 로 바꿀 것
 - **sa 를 직접 쓰지 말 것.** AS 전용 로그인과 DB 를 만들고 필요한 권한만 부여한다
 - AS 는 여러 DB 를 만든다. `dbcreator` 권한이 필요하다
+- **포트**: `MSSQL_PORT`(기본 1433)를 바꿨다면 AS `input.json` 의 `sql.port` 를 같은 값으로
+  두고, 연결 문자열 템플릿의 포트도 맞춘다. `sql_connection_string_template` 은
+  `Server=tcp:<host>,<포트>`, `_sqlalchemy_pyodbc` 는 `@<host>:<포트>/` 다.
+  `_jdbc`(`jdbc:sqlserver://<host>;`)와 `_odbc`(`SERVER=<host>;`)는 포트를 적지 않으면
+  1433 으로 붙으므로 `jdbc:sqlserver://<host>:<포트>;`, `SERVER=<host>,<포트>;` 처럼 넣는다
 
 ```sql
 -- 예: AS 전용 로그인

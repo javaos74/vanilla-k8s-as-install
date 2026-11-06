@@ -100,6 +100,11 @@ ok "다이제스트 기록: conf/images.digests"
 #   docker run 으로도 가능하지만 자격증명이 명령행에 노출되고(ps 로 보인다)
 #   재현성이 떨어진다. compose 파일로 두면 값이 파일에 남고 diff 가 된다.
 #   compose 플러그인은 10-k8s 번들에 포함돼 있다.
+#
+# 포트:
+#   S3 API 는 ports 의 왼쪽(__MINIO_PORT__)만 호스트 포트로, site.env 의
+#   MINIO_PORT(기본 9000)를 install.sh 가 치환한다. 컨테이너 안의 API 리스너와
+#   healthcheck 는 9000 고정이다. 웹 콘솔은 호스트·컨테이너 모두 9001 고정이다.
 #=====================================================================
 step "compose 템플릿 생성"
 
@@ -127,7 +132,7 @@ services:
     env_file:
       - __MINIO_DIR__/minio.env
     ports:
-      - "9000:9000"   # S3 API (HTTPS)
+      - "__MINIO_PORT__:9000"   # S3 API (HTTPS)
       - "9001:9001"   # 웹 콘솔 (HTTPS)
     extra_hosts:
       # 사내 DNS 에 이 이름이 없을 수 있다. 컨테이너 안에서도 해석되게 박아둔다.
@@ -158,6 +163,11 @@ ok "docker-compose.yml.tmpl"
 
 #=====================================================================
 # 3. env 템플릿
+#
+# MINIO_SERVER_URL 에는 호스트 포트(MINIO_PORT)를 넣는다. 클라이언트와 콘솔이
+# 이 주소로 붙기 때문이다. 콘솔 주소(MINIO_BROWSER_REDIRECT_URL)는 9001 고정이다.
+# install.sh 는 env 파일을 처음에만 만들고, 이미 있으면 MINIO_SERVER_URL 의
+# 포트만 MINIO_PORT 에 맞춘다(바뀔 때만 백업 후 교체).
 #=====================================================================
 cat > "${CONF_DIR}/minio.env.tmpl" <<'EOF'
 #---------------------------------------------------------------------
@@ -175,7 +185,7 @@ MINIO_ROOT_PASSWORD=__MINIO_ROOT_PASSWORD__
 # 클라이언트에게 알려줄 자기 주소.
 # 이것을 설정하지 않으면 콘솔이 localhost 로 리다이렉트를 만들어
 # 외부 브라우저에서 접속이 끊긴다.
-MINIO_SERVER_URL=https://__MINIO_HOSTNAME__:9000
+MINIO_SERVER_URL=https://__MINIO_HOSTNAME__:__MINIO_PORT__
 MINIO_BROWSER_REDIRECT_URL=https://__MINIO_HOSTNAME__:9001
 
 # 가상 호스트 스타일 버킷 주소(bucket.host)를 쓰려면 필요하다.
@@ -250,7 +260,7 @@ target_os     : Ubuntu 22.04 / 24.04 공용 (OS 의존 없음)
 minio         : ${MINIO_IMAGE}
 mc            : ${MINIO_MC_IMAGE}
 구성          : 단일 노드 단일 드라이브(SNSD), TLS 활성
-포트          : 9000(S3 API) / 9001(콘솔)
+포트          : ${MINIO_PORT} (호스트) -> 9000 (컨테이너, S3 API) / 9001 (콘솔, 고정)
 리전          : ${MINIO_REGION}
 재시작 정책   : unless-stopped
 주의          : 업스트림 아카이브됨. 보안 업데이트 없음(README 1절)

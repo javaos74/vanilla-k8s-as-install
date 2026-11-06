@@ -11,6 +11,9 @@
 #
 # 자격증명은 site.env 의 MINIO_ROOT_USER / MINIO_ROOT_PASSWORD 를 쓴다.
 # 없으면 무작위 생성해 /opt/minio/minio.env(0600)에 저장하고 출력한다.
+#
+# 포트: S3 API 는 호스트 MINIO_PORT(기본 9000) -> 컨테이너 9000.
+#       웹 콘솔은 호스트·컨테이너 모두 9001 고정.
 #---------------------------------------------------------------------
 BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${BUNDLE_ROOT}/00-common/common.sh"
@@ -56,7 +59,7 @@ dc() { docker compose -f "$COMPOSE_FILE" "$@"; }
 # 서버가 TLS 전용이고 자가서명이므로 --insecure 가 필요하다.
 # mc 를 호스트에 설치하지 않고 컨테이너로 돌린다. 번들에 바이너리가 없고
 # (업스트림 아카이브), 호스트를 더럽히지 않는 편이 낫다.
-# --network host: 서버가 host 포트 9000 에 있고, TLS SAN 에 127.0.0.1 이 있다.
+# --network host: 서버가 host 포트 MINIO_PORT(기본 9000)에 있고, TLS SAN 에 127.0.0.1 이 있다.
 #
 # 자격증명을 명령행이 아니라 MC_HOST_<alias> 환경변수로 넘긴다.
 # 명령행에 넣으면 `ps` 와 셸 히스토리에 비밀번호가 남는다.
@@ -67,7 +70,7 @@ mc_host_url() {
     p="$(grep -E '^MINIO_ROOT_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
     # URL 안에 들어가므로 특수문자를 퍼센트 인코딩한다.
     p="$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$p")"
-    echo "https://${u}:${p}@127.0.0.1:9000"
+    echo "https://${u}:${p}@127.0.0.1:${MINIO_PORT}"
 }
 
 mc_run() {
@@ -91,6 +94,30 @@ mc_object_listed() {
 }
 mc_object_contains() {
     mc_run cat "$1" 2>/dev/null | grep -q "$2"
+}
+
+#=====================================================================
+# 기존 env 파일의 API 포트 맞추기
+#
+# env 파일은 처음 설치할 때만 템플릿에서 만든다. 그래서 MINIO_PORT 를 바꿔
+# 다시 실행하면 MINIO_SERVER_URL 에 옛 포트가 남는다. 그 줄의 포트만
+# MINIO_PORT 로 고친다. 비밀번호 등 나머지 줄은 그대로 둔다.
+#
+# install_file 이 내용을 비교한다. 같으면(기본값 그대로) 파일도 백업도 건드리지
+# 않고, 다르면 minio.env.bak.<시각> 으로 백업한 뒤 교체한다.
+# 콘솔 주소(MINIO_BROWSER_REDIRECT_URL)는 9001 고정이라 대상이 아니다.
+#=====================================================================
+sync_env_api_port() {
+    local tmp="${ENV_FILE}.new"
+    # 비밀번호가 든 파일이다. 이전 실행이 남긴 임시 파일의 권한을 물려받지 않게 지우고 만든다.
+    rm -f "$tmp"
+    ( umask 077
+      sed -E "s#^(MINIO_SERVER_URL=https?://[^/:]+):[0-9]+#\\1:${MINIO_PORT}#" \
+          "$ENV_FILE" > "$tmp" )
+    install_file "$tmp" "$ENV_FILE" 0600
+    rm -f "$tmp"
+    grep -qE "^MINIO_SERVER_URL=https?://[^/:]+:${MINIO_PORT}([^0-9]|\$)" "$ENV_FILE" \
+        || warn "${ENV_FILE} 의 MINIO_SERVER_URL 에서 포트를 찾지 못해 고치지 않았다. https://<이름>:${MINIO_PORT} 로 직접 맞출 것."
 }
 
 #=====================================================================
@@ -126,15 +153,15 @@ run_checks() {
     check "재시작 정책 unless-stopped" bash -c "
         [[ \$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' '$CONTAINER' 2>/dev/null) == unless-stopped ]]"
 
-    for p in 9000 9001; do
+    for p in "$MINIO_PORT" 9001; do
         check "호스트 ${p} 수신" retry_until 60 bash -c "ss -lnt | grep -qE ':${p}\b'"
     done
 
     # TLS 로 응답하는지. HTTP 로 오면 --certs-dir 가 먹지 않은 것이다.
-    check "9000 이 TLS 로 응답" retry_until 90 bash -c "
-        curl -sk --max-time 5 https://127.0.0.1:9000/minio/health/live -o /dev/null"
+    check "${MINIO_PORT} 이 TLS 로 응답" retry_until 90 bash -c "
+        curl -sk --max-time 5 https://127.0.0.1:${MINIO_PORT}/minio/health/live -o /dev/null"
     check "health/live 200" retry_until 90 bash -c "
-        [[ \$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://127.0.0.1:9000/minio/health/live) == 200 ]]"
+        [[ \$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 https://127.0.0.1:${MINIO_PORT}/minio/health/live) == 200 ]]"
     check "콘솔 9001 응답" retry_until 60 bash -c "
         curl -sk -o /dev/null --max-time 5 https://127.0.0.1:9001/"
 
@@ -169,7 +196,7 @@ run_checks() {
     rm -f "$tmpf"
 
     log "리전: $(grep -E '^MINIO_REGION=' "$ENV_FILE" | cut -d= -f2-)"
-    log "S3 엔드포인트: https://${MINIO_HOSTNAME}:9000"
+    log "S3 엔드포인트: https://${MINIO_HOSTNAME}:${MINIO_PORT}"
     log "콘솔:          https://${MINIO_HOSTNAME}:9001"
 
     check_summary
@@ -207,7 +234,7 @@ do_restart_test() {
     else
         die "자동 복구되지 않았다. 재시작 정책을 확인할 것."
     fi
-    retry_until 90 bash -c "curl -sk -o /dev/null --max-time 5 https://127.0.0.1:9000/minio/health/live" \
+    retry_until 90 bash -c "curl -sk -o /dev/null --max-time 5 https://127.0.0.1:${MINIO_PORT}/minio/health/live" \
         && ok "복구 후 health 응답 정상" || die "복구됐지만 health 가 응답하지 않는다"
 
     # docker 데몬 재시작 = 노드 재부팅 대리 검증
@@ -215,7 +242,7 @@ do_restart_test() {
     systemctl restart docker || die "docker 데몬 재시작 실패"
     retry_until 120 bash -c "[[ \$(docker inspect -f '{{.State.Status}}' '$CONTAINER' 2>/dev/null) == running ]]" \
         && ok "데몬 재시작 후 복구됨" || die "데몬 재시작 후 올라오지 않았다"
-    retry_until 120 bash -c "curl -sk -o /dev/null --max-time 5 https://127.0.0.1:9000/minio/health/live" \
+    retry_until 120 bash -c "curl -sk -o /dev/null --max-time 5 https://127.0.0.1:${MINIO_PORT}/minio/health/live" \
         && ok "health 응답 정상" || die "복구됐지만 health 가 응답하지 않는다"
     exit 0
 }
@@ -250,15 +277,21 @@ docker compose version >/dev/null 2>&1 \
     || die "docker compose 플러그인이 없다. 10-k8s 번들의 docker-compose-plugin deb 를 확인할 것."
 ok "docker $(docker --version | awk '{print $3}' | tr -d ,) / compose $(docker compose version --short 2>/dev/null)"
 
+if [[ ! "$MINIO_PORT" =~ ^[0-9]{1,5}$ ]] || ((MINIO_PORT < 1 || MINIO_PORT > 65535)); then
+    die "MINIO_PORT 값이 유효하지 않다: ${MINIO_PORT}"
+fi
+# 콘솔은 호스트 9001 고정이다. 같은 값이면 compose 가 같은 호스트 포트를 두 번 publish 한다.
+((MINIO_PORT != 9001)) || die "MINIO_PORT 는 콘솔 포트 9001 과 달라야 한다"
+
 # 포트 선점 확인. 기동 실패는 로그만 남기고 조용히 끝나므로 먼저 잡는다.
-for p in 9000 9001; do
+for p in "$MINIO_PORT" 9001; do
     if ss -lnt | grep -qE ":${p}\b"; then
         if ! docker inspect -f '{{.State.Running}}' "$CONTAINER" >/dev/null 2>&1; then
             die "포트 ${p} 를 다른 프로세스가 쓰고 있다: $(ss -lntp | grep -E ":${p}\b" | head -1)"
         fi
     fi
 done
-ok "포트 9000/9001 사용 가능"
+ok "포트 ${MINIO_PORT}/9001 사용 가능"
 
 log "접속 이름=${MINIO_HOSTNAME} / 주소=${MINIO_HOST_IP}"
 
@@ -296,6 +329,7 @@ if [[ -f "$ENV_FILE" ]]; then
     ok "기존 env 파일 사용: ${ENV_FILE}"
     MINIO_ROOT_USER="$(grep -E '^MINIO_ROOT_USER=' "$ENV_FILE" | cut -d= -f2-)"
     MINIO_ROOT_PASSWORD="$(grep -E '^MINIO_ROOT_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
+    sync_env_api_port
 else
     # site.env 값이 있으면 쓰고, 없으면 무작위 생성한다.
     # 무작위 생성이 기본인 이유: 공개 저장소에 기본 비밀번호를 적어두면
@@ -314,6 +348,7 @@ else
     sed -e "s|__MINIO_ROOT_USER__|${MINIO_ROOT_USER}|g" \
         -e "s|__MINIO_ROOT_PASSWORD__|${MINIO_ROOT_PASSWORD}|g" \
         -e "s|__MINIO_HOSTNAME__|${MINIO_HOSTNAME}|g" \
+        -e "s|__MINIO_PORT__|${MINIO_PORT}|g" \
         -e "s|__MINIO_REGION__|${MINIO_REGION}|g" \
         "${CONF_DIR}/minio.env.tmpl" > "$ENV_FILE"
     chmod 0600 "$ENV_FILE"
@@ -376,6 +411,7 @@ sed -e "s|__MINIO_IMAGE__|${MINIO_IMAGE}|g" \
     -e "s|__MINIO_DATA_DIR__|${MINIO_DATA_DIR}|g" \
     -e "s|__MINIO_HOSTNAME__|${MINIO_HOSTNAME}|g" \
     -e "s|__MINIO_HOST_IP__|${MINIO_HOST_IP}|g" \
+    -e "s|__MINIO_PORT__|${MINIO_PORT}|g" \
     "${CONF_DIR}/docker-compose.yml.tmpl" > "${COMPOSE_FILE}.new"
 
 docker compose -f "${COMPOSE_FILE}.new" config >/dev/null 2>&1 \
@@ -390,7 +426,7 @@ dc up -d >/dev/null 2>&1 || { dc logs --tail 30; die "기동 실패"; }
 
 # 상태 플래그가 아니라 실제 응답으로 확인한다. 기동 실패는 Running=true 로
 # 잠깐 보였다가 종료되는 형태로 나타나므로 플래그로는 놓친다.
-if ! retry_until 120 bash -c "curl -sk -o /dev/null --max-time 3 https://127.0.0.1:9000/minio/health/live"; then
+if ! retry_until 120 bash -c "curl -sk -o /dev/null --max-time 3 https://127.0.0.1:${MINIO_PORT}/minio/health/live"; then
     dc logs --tail 30 >&2 || true
     die "MinIO 가 정상 기동하지 않았다(health 무응답). 위 로그를 확인할 것."
 fi
@@ -411,7 +447,7 @@ if [[ "${GENERATED_PW:-0}" == 1 ]]; then
     echo "    (${ENV_FILE} 에 0600 으로 저장돼 있다)"
     echo
 fi
-echo "  S3 엔드포인트: https://${MINIO_HOSTNAME}:9000   (리전 ${MINIO_REGION})"
+echo "  S3 엔드포인트: https://${MINIO_HOSTNAME}:${MINIO_PORT}   (리전 ${MINIO_REGION})"
 echo "  웹 콘솔:       https://${MINIO_HOSTNAME}:9001"
 echo
 echo "  이름으로 접속하려면 클라이언트의 /etc/hosts 에 매핑이 필요하다:"

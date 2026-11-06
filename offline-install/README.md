@@ -97,6 +97,35 @@ vi site.env
 - `MSSQL_DATA_DIR` / `MSSQL_SA_PASSWORD` / `MSSQL_PID`: 외부 MSSQL 데이터 경로, SA 암호 및 에디션
 - `PG_DATA_DIR` / `PG_HOSTNAME` / `PG_PASSWORD`: 외부 PostgreSQL 데이터 경로(기본: `/data/postgresql`), 접속 FQDN 및 암호
 - `REDIS_HOSTNAME` / `REDIS_PASSWORD` / `REDIS_PORT`: Redis 접속 FQDN, 패스워드 및 포트 (기본 6379)
+- `MINIO_PORT` / `SEAWEEDFS_S3_PORT` / `POSTGRES_PORT` / `MSSQL_PORT`: 서비스별 호스트 노출 포트 (기본 9000 / 8333 / 5432 / 1433). 아래 "서비스 포트를 바꿀 때" 참고
+
+#### 서비스 포트를 바꿀 때
+
+`site.env` 의 포트 변수는 **호스트에 노출하는 포트만** 바꿉니다. 컨테이너 안의 포트, healthcheck, 설치 스크립트가 `docker exec` 로 붙는 포트는 기본값 그대로입니다. 키를 적지 않으면 `versions.env` 의 기본값(지금까지 쓰던 포트)이 쓰이므로, 기존 `site.env` 로 다시 설치해도 결과가 같습니다.
+
+| 변수 | 기본값 | 컨테이너 포트 | 반영되는 곳 |
+|---|---|---|---|
+| `MINIO_PORT` | 9000 | 9000 | `20-minio/install.sh`. 웹 콘솔은 9001 고정. 이미 설치된 서버에서 바꾸면 `/opt/minio/minio.env` 의 `MINIO_SERVER_URL` 포트만 고치고 `minio.env.bak.<시각>` 백업을 남깁니다 |
+| `SEAWEEDFS_S3_PORT` | 8333 | 8333 | `21-seaweedfs` 는 `install.sh` 가 아직 없어 **지금은 BUNDLE-INFO 표기에만** 반영됩니다. compose 템플릿의 `__SEAWEEDFS_S3_PORT__` 는 앞으로 작성할 `install.sh` 가 치환합니다 |
+| `POSTGRES_PORT` | 5432 | 5432 | `80-postgresql/install.sh` |
+| `MSSQL_PORT` | 1433 | 1433 | `70-mssql/install.sh` |
+| `REDIS_PORT` | 6379 | 6379 | `45-redis/install.sh` |
+| `OLLAMA_EMBED_PORT` | 80 | 80 | `85-ollama-embedding/install.sh` |
+
+Harbor 는 포트 변수가 없습니다. HTTPS 443 고정이며 HTTPS 로만 사용합니다(4.4절).
+
+포트를 기본값에서 바꾸면 아래도 운영자가 함께 맞춥니다. 설치 스크립트는 이것들을 고치지 않습니다.
+
+1. **번들 다시 만들기**: 빌드 호스트의 `site.env` 를 고치고 해당 번들을 다시 빌드합니다. 타깃에서 번들 안의 `site.env` 를 고치면 `install.sh` 첫 단계의 무결성 검사(`SHA256SUMS`)에서 멈춥니다.
+2. **AS `input.json`** (5.1절)
+   - MinIO / SeaweedFS: `external_object_storage.port`
+   - SQL Server: `sql.port`. 연결 문자열 템플릿을 쓰면 `sql_connection_string_template`(`Server=tcp:<host>,<포트>`)와 `sql_connection_string_template_sqlalchemy_pyodbc`(`@<host>:<포트>/`)의 포트도 바꿉니다. `sql_connection_string_template_jdbc`(`jdbc:sqlserver://<host>;`)와 `sql_connection_string_template_odbc`(`SERVER=<host>;`)는 포트를 적지 않으면 1433 으로 붙으므로 `jdbc:sqlserver://<host>:<포트>;`, `SERVER=<host>,<포트>;` 처럼 포트를 넣습니다.
+   - PostgreSQL: `postgresql.port`, `postgresql_connection_string_template_sqlalchemy_pyodbc` / `_asyncpg` 의 `@<host>:<포트>/`
+3. **클라이언트**: `mc alias`, 저장소 루트 `minio-client/mc-client.yaml` 의 `MC_URL`, 앱의 연결 문자열(SQL Server 는 `<host>,<포트>`, PostgreSQL 은 `<host>:<포트>`)
+4. **네트워크**: 클라우드 보안그룹·NSG, 상위 방화벽·LB 규칙. 대상 `install.sh` 는 호스트 방화벽(firewalld/ufw)을 건드리지 않습니다.
+
+> [!NOTE]
+> 기본값이 아닌 포트로 실제 서버에서 설치해 본 적은 없습니다. 문법 검사와 템플릿 렌더링 검사까지만 했습니다.
 
 ### 2.2 컨테이너 환경에서 번들 빌드
 
@@ -334,7 +363,7 @@ sudo ./install.sh
 sudo ./install.sh --check-only
 ```
 
-- **엔드포인트:** `https://<MINIO_HOSTNAME>:9000` (콘솔: 9001)
+- **엔드포인트:** `https://<MINIO_HOSTNAME>:<MINIO_PORT>` (기본 9000, 콘솔은 9001 고정)
 - **자격증명 확인:** `/opt/minio/minio.env`
 - **Automation Suite용 버킷 생성:** MinIO Client(`mc`) 또는 웹 콘솔에서 AS 설치에 사용할 버킷(예: `charles-as-bucket` 또는 `uipath`)을 사전 생성합니다.
 
@@ -342,7 +371,7 @@ sudo ./install.sh --check-only
 > **MinIO 대안 — SeaweedFS ([`21-seaweedfs`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/21-seaweedfs/README.md))**  
 > MinIO 는 AGPL-3.0 이고, 2026-10-17 기준 quay.io 이미지가 401 을 반환해 번들을 새로 만들 수 없습니다. Apache-2.0 인 SeaweedFS 4.48 을 대안으로 검토 중입니다.
 > 현재는 번들 빌드(`build-in-container.sh 26.04 21-seaweedfs`)와 `05-certs` 의 `weed` 인증서로 띄운 S3 TLS 왕복 스모크 테스트(27/27)까지 검증했고, `install.sh` 는 아직 없습니다.
-> 엔드포인트는 `https://<WEED_HOSTNAME>:8333` 입니다.
+> 엔드포인트는 `https://<WEED_HOSTNAME>:<SEAWEEDFS_S3_PORT>`(기본 8333)입니다. `install.sh` 가 없는 지금은 `SEAWEEDFS_S3_PORT` 가 BUNDLE-INFO 표기에만 반영됩니다(2.1절).
 
 ---
 
@@ -367,6 +396,9 @@ sudo ./install.sh --test-restart
 2. Automation Suite 이미지를 저장할 신규 프로젝트 생성: `uipath` (Public으로 설정하거나 Pull Secret 연동 준비)
 3. 모든 K8s 노드 및 워커에서 Harbor 인증서 신뢰 상태 확인 (`docker login <HARBOR_HOSTNAME>`)
 
+> [!IMPORTANT]
+> **Harbor 는 HTTPS 로만 사용합니다.** 포트는 443 고정이며 `site.env` 에 포트 변수가 없습니다. 브라우저·API 와 containerd `hosts.toml` 은 `https://<HARBOR_HOSTNAME>` 을, `docker login`·이미지 경로·AS `input.json` 의 `registries.*.url` 은 포트를 붙이지 않은 `<HARBOR_HOSTNAME>`(예: `<HARBOR_HOSTNAME>/uipath`)을 씁니다. 둘 다 HTTPS 443 으로 붙습니다. Harbor 는 80 도 열지만 HTTPS 로 리다이렉트(308)만 합니다. `http://` 주소나 `insecure-registries` 로 붙이지 않습니다([`30-harbor`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/30-harbor/README.md) 2절).
+
 ---
 
 ### 4.4.1 Metrics Server 배포 (로컬 Harbor 경유, [`35-metrics-server`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/35-metrics-server/README.md))
@@ -390,8 +422,8 @@ sudo ./install.sh --check-only     # Deployment·APIService·kubectl top·imageI
 | 구성 요소 | 디렉터리 | 주요 역할 및 구성 요령 |
 |---|---|---|
 | **L4 Load Balancer** | [`40-haproxy`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/40-haproxy/README.md) | 호스트의 `80`, `443`, `15021` 포트를 인그레스 게이트웨이 NodePort로 패스스루 (`--network host`, `--restart unless-stopped`). Worker 노드에는 설치하지 않음. |
-| **SQL Server** | [`70-mssql`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/70-mssql/README.md) | **Full-Text Search(FTS)**가 내장된 커스텀 이미지(`mssql-fts:2022`) 필수 실행. 공식 MS 이미지에는 FTS가 없어 AS 설치 실패. 포트 1433. |
-| **PostgreSQL** | [`80-postgresql`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/80-postgresql/README.md) | PostgreSQL 16 컨테이너, TLS 적용, 포트 5432 (Data Service 등 요구 시). `template1`에 `btree_gin`을 설치해 이후 만드는 DB가 확장을 물려받음. |
+| **SQL Server** | [`70-mssql`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/70-mssql/README.md) | **Full-Text Search(FTS)**가 내장된 커스텀 이미지(`mssql-fts:2022`) 필수 실행. 공식 MS 이미지에는 FTS가 없어 AS 설치 실패. 호스트 포트 `MSSQL_PORT`(기본 1433), 컨테이너 1433. |
+| **PostgreSQL** | [`80-postgresql`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/80-postgresql/README.md) | PostgreSQL 16 컨테이너, TLS 적용, 호스트 포트 `POSTGRES_PORT`(기본 5432), 컨테이너 5432 (Data Service 등 요구 시). `template1`에 `btree_gin`을 설치해 이후 만드는 DB가 확장을 물려받음. |
 | **Redis Cache** | [`45-redis`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/45-redis/README.md) | Redis OSS 단일 노드 (TLS 리스너, 포트 6379, 데이터 디렉터리 `/data/redis`). |
 
 ### 4.6 (선택) 임베딩 서비스 ([`85-ollama-embedding`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/85-ollama-embedding/README.md))
@@ -484,6 +516,9 @@ sudo ./install.sh                                                 # 키 자동 �
      }
    }
    ```
+
+   > [!NOTE]
+   > 위 예시의 포트는 기본값입니다. `external_object_storage.port` 와 `sql.port` 는 `site.env` 의 `MINIO_PORT`(SeaweedFS 면 `SEAWEEDFS_S3_PORT`)와 `MSSQL_PORT` 에 맞춥니다. PostgreSQL 을 쓰면 `postgresql.port` 를 `POSTGRES_PORT` 에 맞춥니다. 기본값이 아니면 연결 문자열 템플릿도 고쳐야 합니다(2.1절 "서비스 포트를 바꿀 때").
 
 ---
 

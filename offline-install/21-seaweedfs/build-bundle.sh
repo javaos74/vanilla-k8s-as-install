@@ -147,6 +147,11 @@ fi
 #   이미지 entrypoint 가 -master.volumeSizeLimitMB=1024 를 끼워 넣으므로
 #   (컨테이너 ps 로 확인) 볼륨 하나가 1GB 다. 기본값 8 이면 약 8GB 에서
 #   쓰기가 멈춘다.
+#
+# S3 포트 : 컨테이너 안의 S3 게이트웨이(-s3.port)와 healthcheck 는 8333 고정이다.
+#   ports 의 왼쪽(__SEAWEEDFS_S3_PORT__)만 호스트 포트로, site.env 의
+#   SEAWEEDFS_S3_PORT(기본 8333)를 install.sh 가 치환한다. install.sh 는 아직
+#   없으므로(README 6절) 지금은 이 값이 BUNDLE-INFO 표기에만 반영된다.
 #=====================================================================
 step "compose 템플릿 생성"
 
@@ -174,21 +179,21 @@ services:
       - -master.telemetry=false
       - -s3
       - -s3.ip.bind=0.0.0.0
-      - -s3.port=__SEAWEEDFS_S3_PORT__
+      - -s3.port=8333
       - -s3.config=/etc/seaweedfs/s3.json
       - -s3.cert.file=/certs/weed.crt
       - -s3.key.file=/certs/weed.key
       # 가상 호스트 스타일 버킷 주소(<bucket>.<host>). 인증서에 *.<host> 가 있다.
       - -s3.domainName=__WEED_HOSTNAME__
     ports:
-      - "__SEAWEEDFS_S3_PORT__:__SEAWEEDFS_S3_PORT__"   # S3 API (HTTPS)
+      - "__SEAWEEDFS_S3_PORT__:8333"   # S3 API (HTTPS)
     volumes:
       - __WEED_DATA_DIR__:/data
       - __WEED_DIR__/s3.json:/etc/seaweedfs/s3.json:ro
       - __WEED_DIR__/certs:/certs:ro
     healthcheck:
       # 인증 없이 응답하는 S3 헬스 엔드포인트. -k: 컨테이너 안에는 사내 CA 가 없다.
-      test: ["CMD-SHELL", "curl -fsk https://localhost:__SEAWEEDFS_S3_PORT__/healthz >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsk https://localhost:8333/healthz >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -258,7 +263,7 @@ seaweedfs     : ${SEAWEEDFS_IMAGE}@${SEAWEEDFS_IMAGE_DIGEST}
 client        : ${SEAWEEDFS_CLIENT_IMAGE}@${SEAWEEDFS_CLIENT_IMAGE_DIGEST}
 license       : ${WEED_LICENSE:-unknown} (이미지 라벨)
 구성          : 단일 노드 weed server (master+volume+filer+S3), S3 TLS 전용
-포트          : ${SEAWEEDFS_S3_PORT}(S3 API, HTTPS). 내부 포트는 공개하지 않음
+포트          : ${SEAWEEDFS_S3_PORT} (호스트) -> 8333 (컨테이너, S3 API, HTTPS). 내부 포트는 공개하지 않음
 리전          : ${SEAWEEDFS_REGION}
 재시작 정책   : unless-stopped
 EOF

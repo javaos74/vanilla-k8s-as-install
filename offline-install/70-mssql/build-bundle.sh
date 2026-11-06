@@ -111,6 +111,11 @@ fi
 
 #=====================================================================
 # 2. compose 템플릿
+#
+# ports 의 왼쪽(__MSSQL_PORT__)은 호스트 포트로, site.env 의 MSSQL_PORT
+# (기본 1433)를 install.sh 가 치환한다. 오른쪽 1433 은 컨테이너 안의 SQL Server
+# 포트이며 고정이다(MSSQL_TCP_PORT·mssql.conf tcpport 를 쓰지 않는다).
+# healthcheck 와 install.sh 의 docker exec 접속도 컨테이너 안 1433 으로 붙는다.
 #=====================================================================
 step "compose 템플릿 생성"
 
@@ -282,7 +287,7 @@ image         : ${MSSQL_SERVER_IMAGE}
 digest        : ${MSSQL_SERVER_IMAGE_DIGEST}
 mssql-server  : ${MSSQL_FTS_PKG_VERSION}
 FTS           : 포함 (mssql-server-fts ${MSSQL_FTS_PKG_VERSION})
-포트          : ${MSSQL_PORT}
+포트          : ${MSSQL_PORT} (호스트) -> 1433 (컨테이너)
 collation     : ${MSSQL_COLLATION}
 에디션 기본값 : ${MSSQL_PID_DEFAULT} (운영은 Standard/Enterprise 필요)
 재시작 정책   : unless-stopped

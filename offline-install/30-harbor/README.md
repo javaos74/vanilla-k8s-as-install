@@ -66,6 +66,24 @@ log  redis  registry  postgresql  core  portal  proxy  registryctl  jobservice
 
 생성된 `harbor.yml` 은 admin·DB 비밀번호를 담으므로 `0600` 으로 둔다.
 
+### HTTPS 로만 쓴다 — 포트는 443 고정
+
+Harbor 포트는 변수로 두지 않는다. `site.env` 에 Harbor 포트 키가 없고 `harbor.yml` 의
+`https.port` 는 443 고정이다. Harbor 는 **HTTPS 로만** 사용한다.
+
+- 브라우저·API 와 containerd `hosts.toml` 은 `https://<HARBOR_HOSTNAME>` 을 쓴다.
+  `docker login`, 이미지 경로, AS `input.json` 의 `registries.docker.url` /
+  `registries.helm.url` 은 포트를 붙이지 않은 `<HARBOR_HOSTNAME>`(예:
+  `<HARBOR_HOSTNAME>/uipath`)을 쓴다. 둘 다 HTTPS 443 으로 붙는다.
+- 80 은 Harbor 가 항상 publish 하지만 평문으로 서비스하지 않고 HTTPS 로 308 리다이렉트만
+  한다(7절). 클라이언트를 `http://` 주소로 설정하지 않는다.
+- `insecure-registries` 로 TLS 검증을 끄지 않는다. CA 를 신뢰시킨다(5절, 6절).
+
+443 이 아닌 포트를 쓰면 레지스트리 주소가 `<HARBOR_HOSTNAME>:<포트>` 가 된다. 그러면
+docker·containerd 신뢰 디렉터리 이름(`05-certs/deploy-certs.sh`), 이미지 경로
+(`35-metrics-server`), AS `input.json` 의 `registries` 를 함께 바꿔야 한다. 이 번들은
+그 구성을 지원하지 않는다. 443 충돌은 별도 호스트로 피한다(4절).
+
 ---
 
 ## 3. systemd 유닛이 필요한 이유 — 기동 순서

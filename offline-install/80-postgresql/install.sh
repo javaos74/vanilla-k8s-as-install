@@ -9,7 +9,8 @@
 #
 # 전제: 10-k8s 설치 완료(docker + docker compose).
 #
-# 결과: /opt/postgresql 에 PostgreSQL. TLS 활성, 5432 수신.
+# 결과: /opt/postgresql 에 PostgreSQL. TLS 활성.
+#       호스트 POSTGRES_PORT(기본 5432)로 노출하고, 컨테이너 안에서는 5432 고정.
 #---------------------------------------------------------------------
 BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMMON_FILE="${BUNDLE_ROOT}/00-common/common.sh"
@@ -254,6 +255,9 @@ docker info >/dev/null 2>&1 || die "docker 가 동작하지 않는다. 10-k8s �
 docker compose version >/dev/null 2>&1 || die "docker compose 플러그인이 없다."
 ok "docker $(docker --version | awk '{print $3}' | tr -d ,) / compose $(docker compose version --short 2>/dev/null)"
 
+if [[ ! "$POSTGRES_PORT" =~ ^[0-9]{1,5}$ ]] || ((POSTGRES_PORT < 1 || POSTGRES_PORT > 65535)); then
+    die "POSTGRES_PORT 값이 유효하지 않다: ${POSTGRES_PORT}"
+fi
 if ss -lnt | grep -qE ":${POSTGRES_PORT}\b"; then
     docker inspect -f '{{.State.Running}}' "$CONTAINER" >/dev/null 2>&1 \
         || die "포트 ${POSTGRES_PORT} 를 다른 프로세스가 쓰고 있다: $(ss -lntp | grep -E ":${POSTGRES_PORT}\b" | head -1)"

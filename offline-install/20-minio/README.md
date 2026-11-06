@@ -105,6 +105,7 @@ sudo ./install.sh
 | `MINIO_ROOT_USER` | 비우면 `uipathadmin` |
 | `MINIO_ROOT_PASSWORD` | **비우면 무작위 생성**하고 설치 끝에 출력한다 |
 | `MINIO_REGION` | `versions.env` 에 있다. UiPath AS 가 리전을 요구한다 |
+| `MINIO_PORT` | `9000`. 호스트에 노출할 S3 API 포트. 컨테이너 안의 MinIO 는 9000 고정이다 |
 
 비밀번호를 기본값으로 박아두지 않는다. 공개 저장소의 기본 비밀번호가 그대로
 운영에 들어가는 일이 실제로 생긴다. 생성된 값은 `/opt/minio/minio.env`(0600)에
@@ -113,6 +114,28 @@ sudo ./install.sh
 MinIO 는 **`MINIO_ROOT_USER` 3자 이상, `MINIO_ROOT_PASSWORD` 8자 이상**이 아니면
 기동 직후 종료된다. 로그에만 이유가 남아 원인을 찾기 어렵다.
 `install.sh` 가 기동 전에 길이를 검사해 먼저 알려준다.
+
+### 포트
+
+| | 호스트 | 컨테이너 |
+|---|---|---|
+| S3 API (HTTPS) | `MINIO_PORT` (기본 9000) | 9000 고정 |
+| 웹 콘솔 (HTTPS) | 9001 고정 | 9001 고정 |
+
+`MINIO_PORT` 는 compose 의 `"<MINIO_PORT>:9000"` 왼쪽과 `minio.env` 의
+`MINIO_SERVER_URL`(`https://<MINIO_HOSTNAME>:<MINIO_PORT>`)에 들어간다. healthcheck 와
+`--console-address ":9001"` 은 그대로다. `install.sh` 는 1~65535 범위의 숫자가 아니거나
+9001 과 같으면 멈춘다.
+
+`minio.env` 는 처음 설치할 때만 만든다. 이미 설치된 서버에서 `MINIO_PORT` 를 바꿔
+다시 실행하면 `install.sh` 가 **`MINIO_SERVER_URL` 의 포트만** 새 값으로 고치고, 원래
+파일을 `minio.env.bak.<시각>` 으로 남긴다. 자격증명 등 다른 줄은 그대로다. 포트가
+이미 같으면(기본값 그대로 재실행) 파일과 백업 모두 바뀌지 않는다.
+`MINIO_BROWSER_REDIRECT_URL`(콘솔, 9001)은 대상이 아니다.
+
+포트를 바꾸면 AS `input.json` 의 `external_object_storage.port` 와 클라이언트의
+엔드포인트도 함께 맞춘다([`offline-install/README.md`](../README.md) 2.1절).
+기본값이 아닌 포트로 실제 서버에서 설치해 본 적은 없다(정적 검사만 했다).
 
 ---
 
@@ -163,8 +186,8 @@ compose 파일 · env 파일(0600) · 인증서 · 데이터 디렉터리 존재
 compose 설정 문법 유효
 컨테이너 실행 중(크래시 루프 아님)      <- PID 10초 유지 확인
 재시작 정책 unless-stopped
-호스트 9000 / 9001 수신
-9000 이 TLS 로 응답 · health/live 200 · 콘솔 9001 응답
+호스트 MINIO_PORT(기본 9000) / 9001 수신
+MINIO_PORT 가 TLS 로 응답 · health/live 200 · 콘솔 9001 응답
 인증서 SAN 에 접속 이름 포함
   -- 버킷 왕복 --
 mc 로 서버 접속 가능
@@ -215,7 +238,7 @@ sudo ./install.sh --test-restart
 | 콘솔 접속 시 localhost 로 리다이렉트되어 끊김 | `MINIO_BROWSER_REDIRECT_URL` 미설정 | `minio.env` 에 있다. 이름을 바꾸면 컨테이너 재생성 필요 |
 | 버킷은 만들어지는데 업로드가 실패 | 데이터 디렉터리가 uid 1000 소유가 아니다 | `chown -R 1000:1000 /data/minio` |
 | 재시작 후 데이터가 사라짐 | 볼륨 마운트 누락 | 판정의 `호스트 볼륨에 데이터 기록됨` 항목 확인 |
-| 포트 9000 바인드 실패 | 다른 프로세스 점유 | `install.sh` 가 사전에 잡는다. `ss -lntp` 확인 |
+| 포트 `MINIO_PORT`(기본 9000) / 9001 바인드 실패 | 다른 프로세스 점유 | `install.sh` 가 사전에 잡는다. `ss -lntp` 확인. API 포트는 `site.env` 의 `MINIO_PORT` 로 바꿀 수 있다 |
 
 로그는 `docker logs minio` 또는 `docker compose -f /opt/minio/docker-compose.yml logs` 다.
 
@@ -244,7 +267,8 @@ sudo ./install.sh --test-restart
 
 AS 는 S3 호환 스토리지에 다음을 요구한다.
 
-- **엔드포인트**: `https://<MINIO_HOSTNAME>:9000`
+- **엔드포인트**: `https://<MINIO_HOSTNAME>:<MINIO_PORT>` (기본 9000).
+  AS `input.json` 의 `external_object_storage.port` 를 `MINIO_PORT` 와 같게 둔다.
 - **리전**: `versions.env` 의 `MINIO_REGION` (기본 `ap-northeast-2`).
   리전을 비우면 일부 S3 클라이언트가 서명 계산에 실패한다.
 - **자격증명**: `/opt/minio/minio.env` 의 루트 계정.
@@ -256,7 +280,7 @@ AS 는 S3 호환 스토리지에 다음을 요구한다.
 ```bash
 # 예: AS 용 버킷을 미리 생성
 docker run --rm --network host \
-  -e MC_HOST_m="https://<user>:<pass>@127.0.0.1:9000" \
+  -e MC_HOST_m="https://<user>:<pass>@127.0.0.1:<MINIO_PORT>" \
   quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z --insecure \
   mb m/uipath-bucket
 ```

@@ -9,7 +9,8 @@
 #
 # 전제: 10-k8s 설치 완료(docker + docker compose), 메모리 4GB 이상 권장.
 #
-# 결과: /opt/mssql 에 SQL Server 2022(FTS 포함). 1433 수신.
+# 결과: /opt/mssql 에 SQL Server 2022(FTS 포함).
+#       호스트 MSSQL_PORT(기본 1433)로 노출하고, 컨테이너 안에서는 1433 고정.
 #---------------------------------------------------------------------
 BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${BUNDLE_ROOT}/00-common/common.sh"
@@ -266,6 +267,9 @@ MEM_MB="$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)"
 ((MEM_MB >= 4096)) || warn "메모리 ${MEM_MB}MB. 동작은 하지만 4GB 이상을 권장한다."
 ok "메모리 ${MEM_MB}MB"
 
+if [[ ! "$MSSQL_PORT" =~ ^[0-9]{1,5}$ ]] || ((MSSQL_PORT < 1 || MSSQL_PORT > 65535)); then
+    die "MSSQL_PORT 값이 유효하지 않다: ${MSSQL_PORT}"
+fi
 if ss -lnt | grep -qE ":${MSSQL_PORT}\b"; then
     docker inspect -f '{{.State.Running}}' "$CONTAINER" >/dev/null 2>&1 \
         || die "포트 ${MSSQL_PORT} 를 다른 프로세스가 쓰고 있다: $(ss -lntp | grep -E ":${MSSQL_PORT}\b" | head -1)"

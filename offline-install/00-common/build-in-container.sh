@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
 #---------------------------------------------------------------------
 # 컨테이너에서 오프라인 번들을 만든다 (rootless podman, sudo 불필요)
+# 85-ollama-embedding 만 예외로 호스트 Docker 로 빌드한다(아래).
 #
 #   ./build-in-container.sh 24.04 10-k8s
 #   ./build-in-container.sh 22.04 10-k8s
 #   ./build-in-container.sh 24.04 20-minio 30-harbor 40-haproxy
 #   ./build-in-container.sh 26.04 21-seaweedfs
 #   ./build-in-container.sh 24.04 45-redis
+#   ./build-in-container.sh 24.04 85-ollama-embedding
 #   ./build-in-container.sh 24.04 all
+#
+# 85-ollama-embedding 은 왜 호스트 Docker 인가:
+#   이미지 빌드 중에 ollama serve / ollama pull 로 모델을 이미지에 넣는다
+#   (85-ollama-embedding/README.md D2). docker 데몬이 필요한데 빌드 컨테이너에는
+#   docker 가 없다. 그래서 컨테이너 단계가 끝난 뒤 호스트에서
+#   85-ollama-embedding/build-bundle.sh all (cpu + gpu) 을 실행한다.
+#   실행 계정이 docker 를 못 쓰면 빌드 시작 때 docker 그룹 권한을 구성한다
+#   (prepare_host_docker). 그래도 못 쓰면 경고하고 85 만 건너뛴다.
+#   건너뛰었을 때 종료 코드: all 이면 영향 없음, 단계로 직접 지정했으면 1.
 #
 # 왜 VM 이 아니라 컨테이너인가:
 #   번들 빌드는 deb 와 컨테이너 이미지를 **내려받는** 일뿐이다. 커널이 필요한
@@ -39,26 +50,164 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="docker.io/library/ubuntu:${OSVER}"
 
 # OS 에 의존하는 단계는 10-k8s 뿐이다. 나머지는 어느 이미지에서 만들어도 같다.
-ALL_STAGES=(10-k8s 20-minio 21-seaweedfs 30-harbor 35-metrics-server 40-haproxy 45-redis 50-nfs-csi 60-cilium 70-mssql 80-postgresql)
+# 85-ollama-embedding 은 컨테이너가 아니라 호스트 Docker 로 빌드한다(머리말).
+ALL_STAGES=(10-k8s 20-minio 21-seaweedfs 30-harbor 35-metrics-server 40-haproxy 45-redis 50-nfs-csi 60-cilium 70-mssql 80-postgresql 85-ollama-embedding)
 if [[ "$1" == "all" ]]; then
     STAGES=("${ALL_STAGES[@]}")
 else
     STAGES=("$@")
 fi
 
+# 85-ollama-embedding 을 컨테이너 단계에서 뺀다.
+#   OLLAMA_MODE : "" = 요청 없음 / all = all 에 포함 / named = 단계로 직접 지정
+# 셸 자동 완성이 붙이는 끝의 / 도 같은 단계로 본다.
+OLLAMA_MODE=""
+CTR_STAGES=()
+for st in "${STAGES[@]}"; do
+    if [[ "${st%/}" == "85-ollama-embedding" ]]; then
+        if [[ "$1" == "all" ]]; then OLLAMA_MODE=all; else OLLAMA_MODE=named; fi
+    else
+        CTR_STAGES+=("$st")
+    fi
+done
+
+#---------------------------------------------------------------------
+# 85-ollama-embedding 용 호스트 Docker 준비
+#
+# 실행 계정이 docker 데몬에 접근할 수 있게 한다. sudo docker 로 우회하지 않는다.
+#   1) 지금 프로세스로 docker info 가 되면 그대로 쓴다.
+#   2) 소켓 권한 거부이고 계정이 이미 docker 그룹 회원이면(/etc/group) 이 세션에만
+#      그룹이 없는 것이다(그룹 추가 전에 연 로그인 셸, tmux 서버). 다시 로그인하지
+#      않도록 sg docker 로 실행한다.
+#   3) 회원이 아니면 sudo usermod -aG docker <계정> 으로 추가하고 sg docker 로 실행한다.
+#      확인을 묻지 않는다. 바꾸는 내용과 docker 그룹이 root 와 같은 권한이라는 점은
+#      실행 전에 출력한다. stdin 이 터미널이 아니면 sudo -n 으로 암호를 묻지 않는다.
+# 컨테이너 단계보다 먼저 부른다. sudo 암호 입력과 경고가 긴 빌드의 끝이 아니라
+# 시작에 나오게 하려는 것이다.
+#
+# 결과: OLLAMA_RUN=direct|sg. 쓸 수 없으면 OLLAMA_SKIP(원인)·OLLAMA_FIX(조치)를
+# 남기고 1 을 돌려준다.
+#---------------------------------------------------------------------
+OLLAMA_RUN="" OLLAMA_SKIP="" OLLAMA_FIX=""
+
+ollama_skip() {
+    OLLAMA_SKIP="$1" OLLAMA_FIX="$2"
+    echo "WARN 호스트 Docker 를 쓸 수 없어 85-ollama-embedding 을 건너뛴다. 나머지 단계는 계속한다." >&2
+    echo "     원인: ${OLLAMA_SKIP}" >&2
+    echo "     조치: ${OLLAMA_FIX}" >&2
+    return 1
+}
+
+prepare_host_docker() {
+    local user err sudo_cmd=(sudo)
+    user="$(id -un)"
+
+    [[ "$(uname -s)/$(uname -m)" == Linux/x86_64 ]] \
+        || { ollama_skip "Linux x86_64 빌드 호스트가 아니다(현재 $(uname -s)/$(uname -m))" \
+                 "Linux x86_64 + Docker 호스트에서 실행한다(85-ollama-embedding/README.md D2)"; return 1; }
+    command -v docker >/dev/null 2>&1 \
+        || { ollama_skip "이 호스트에 docker 명령이 없다(빌드 컨테이너가 아니라 호스트의 docker 를 쓴다)" \
+                 "Docker Engine + buildx 를 설치한다(85-ollama-embedding/README.md 3절)"; return 1; }
+
+    if err="$(docker info 2>&1 >/dev/null)"; then
+        OLLAMA_RUN=direct
+        echo "    docker 사용 가능 (계정 ${user})"
+        return 0
+    fi
+    [[ "$err" == *"permission denied"* ]] \
+        || { ollama_skip "docker 데몬에 접근할 수 없다: $(head -n 1 <<<"$err")" \
+                 "sudo systemctl status docker 로 데몬 상태를 확인하고 시작한다"; return 1; }
+    getent group docker >/dev/null 2>&1 \
+        || { ollama_skip "docker 소켓 권한이 없고 이 호스트에 docker 그룹이 없다" \
+                 "ls -l /var/run/docker.sock 으로 소켓 소유 그룹을 확인한다"; return 1; }
+    [[ " $(id -nG) " != *" docker "* ]] \
+        || { ollama_skip "docker 그룹으로 실행 중인데도 소켓 권한이 거부됐다: $(head -n 1 <<<"$err")" \
+                 "ls -l /var/run/docker.sock 으로 소켓 소유 그룹이 docker 인지 확인한다"; return 1; }
+
+    if [[ " $(id -nG "$user") " == *" docker "* ]]; then
+        echo "    ${user} 는 docker 그룹 회원이지만 이 세션에는 그룹이 없다(그룹 추가 전에 연 셸이나 tmux)."
+        echo "    다시 로그인하지 않아도 되도록 이번 빌드는 sg docker 로 실행한다. 바꾸는 것은 없다."
+    else
+        echo "    ${user} 는 docker 그룹이 아니다. 85-ollama-embedding 빌드를 위해 다음을 실행한다:"
+        echo "      sudo usermod -aG docker ${user}"
+        echo "    주의: docker 그룹은 root 와 같은 권한이다(컨테이너로 호스트 파일시스템을 마운트할 수 있다)."
+        echo "    되돌리기: sudo gpasswd -d ${user} docker"
+        [[ -t 0 ]] || sudo_cmd=(sudo -n)
+        "${sudo_cmd[@]}" usermod -aG docker "$user" \
+            || { ollama_skip "${user} 를 docker 그룹에 추가하지 못했다(sudo 불가: 비밀번호 필요 또는 권한 없음)" \
+                     "관리자가 sudo usermod -aG docker ${user} 를 실행한 뒤 다시 실행한다"; return 1; }
+        echo "    추가했다. 이미 열린 셸과 tmux 에는 다시 로그인해야 반영된다. 이번 빌드는 sg docker 로 실행한다."
+    fi
+
+    command -v sg >/dev/null 2>&1 \
+        || { ollama_skip "sg 명령이 없어 docker 그룹으로 실행할 수 없다" \
+                 "다시 로그인한 뒤(tmux 는 tmux kill-server 후) 다시 실행한다"; return 1; }
+    err="$(sg docker -c 'docker info' 2>&1 >/dev/null)" \
+        || { ollama_skip "sg docker 로도 docker 에 접근하지 못했다: $(head -n 1 <<<"$err")" \
+                 "id -nG ${user} 에 docker 가 있는지, 다시 로그인한 셸에서 docker info 가 되는지 확인한다"; return 1; }
+    OLLAMA_RUN=sg
+    echo "    sg docker 로 docker 사용 가능"
+}
+
+# 컨테이너 단계의 결과(rc)를 받아, 요청됐으면 85-ollama-embedding 을 호스트 Docker 로
+# 빌드하고 종료한다. 컨테이너 단계가 실패해도 85 는 빌드한다(RUNNER 와 같은 방식).
+# 종료 코드: 컨테이너 단계 rc 가 0 이 아니면 그 값. 아니면 85 실패 시 1,
+# 85 를 건너뛰었으면 직접 지정한 경우만 1(산출물이 없으므로), all 이면 0.
+finish() {
+    local rc="$1" orc=0
+    [[ -n "$OLLAMA_MODE" ]] || exit "$rc"
+    echo
+    echo "================ 85-ollama-embedding (호스트 Docker) ================"
+    case "$OLLAMA_RUN" in
+        direct)
+            echo "    호스트에서 실행: build-bundle.sh all (cpu + gpu)"
+            (cd "${REPO}/85-ollama-embedding" && ./build-bundle.sh all) || orc=$?
+            ;;
+        sg)
+            echo "    호스트에서 실행: sg docker -c 'build-bundle.sh all' (cpu + gpu)"
+            sg docker -c "$(printf 'cd %q && ./build-bundle.sh all' "${REPO}/85-ollama-embedding")" || orc=$?
+            ;;
+        *)
+            echo "  [SKIP] 85-ollama-embedding: ${OLLAMA_SKIP}"
+            echo "         조치: ${OLLAMA_FIX}"
+            [[ "$OLLAMA_MODE" == all ]] || orc=1
+            ;;
+    esac
+    if [[ -n "$OLLAMA_RUN" ]]; then
+        if ((orc == 0)); then echo "  [OK] 85-ollama-embedding"; else echo "  [FAIL] 85-ollama-embedding"; fi
+    fi
+    ((rc != 0 || orc == 0)) || rc=1
+    exit "$rc"
+}
+
+if [[ -n "$OLLAMA_MODE" ]]; then
+    echo "=== 85-ollama-embedding: 호스트 Docker 확인 ==="
+    prepare_host_docker || true
+    echo
+fi
+
 # 45-redis 는 OS 패키지 번들이 아니라 amd64 Redis 이미지 하나만 받는다.
 # Ubuntu 컨테이너가 필요 없으므로 호스트에서 직접 빌드해 rootless Podman 의
 # user-namespace 재실행 제한을 우회한다.
-if ((${#STAGES[@]} == 1)) && [[ "${STAGES[0]}" == "45-redis" ]]; then
+if ((${#CTR_STAGES[@]} == 1)) && [[ "${CTR_STAGES[0]}" == "45-redis" ]]; then
     echo "Redis 빌드는 OS 독립적이므로 Podman 컨테이너 없이 호스트에서 실행합니다."
-    (cd "${REPO}/45-redis" && ./build-bundle.sh)
-    exit $?
+    rc=0
+    (cd "${REPO}/45-redis" && ./build-bundle.sh) || rc=$?
+    finish "$rc"
 fi
+((${#CTR_STAGES[@]} > 0)) || finish 0
 
 echo "=== 빌드 환경 ==="
 echo "  이미지 : ${IMAGE}"
 echo "  저장소 : ${REPO}"
-echo "  단계   : ${STAGES[*]}"
+echo "  단계   : ${CTR_STAGES[*]}"
+if [[ -n "$OLLAMA_MODE" ]]; then
+    if [[ -n "$OLLAMA_RUN" ]]; then
+        echo "  호스트 : 85-ollama-embedding (호스트 Docker, 컨테이너 단계 뒤에 실행)"
+    else
+        echo "  호스트 : 85-ollama-embedding (건너뜀, 위 WARN 참고)"
+    fi
+fi
 echo
 
 # 컨테이너 안에서 실행할 것. 단계를 순서대로 돌린다.
@@ -129,9 +278,9 @@ INNER
 # /work 에 쓴 파일은 호스트에서 내 소유로 보인다.
 podman run --rm \
     -v "${REPO}:/work:z" \
-    -e STAGES="${STAGES[*]}" \
+    -e STAGES="${CTR_STAGES[*]}" \
     "$IMAGE" \
-    bash -c "$RUNNER" || exit $?
+    bash -c "$RUNNER" || finish $?
 
 #---------------------------------------------------------------------
 # 10-k8s 번들 설치 검증 (새 컨테이너)
@@ -186,5 +335,7 @@ grep -E "depends on|is not installed|error processing" /tmp/dpkg.log | sort -u |
 echo "  이 번들을 쓰지 말 것. 빠진 의존성을 확인해 10-k8s/pkgs-debian.sh 를 고쳐야 한다."
 exit 1
 INNER
-    podman run --rm -v "${REPO}:/work:ro,z" "$IMAGE" bash -c "$VERIFY" || exit $?
+    podman run --rm -v "${REPO}:/work:ro,z" "$IMAGE" bash -c "$VERIFY" || finish $?
 fi
+
+finish 0

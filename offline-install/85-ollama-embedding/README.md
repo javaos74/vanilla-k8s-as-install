@@ -55,7 +55,7 @@ compose 프로젝트 ollama-embedding / 네트워크 ollama-embedding_frontend, 
 | D1 | `ollama/ollama` 버전 | **0.40.13**, linux/amd64 자식 매니페스트 `sha256:93c1376d…` 로 `FROM` 고정 | 2026-11-03 기준 `latest` 가 가리키는 정식 릴리스. 0.40.14 는 rc 뿐이다. 저장소 관례대로 플랫폼 매니페스트를 핀해 태그가 움직여도 같은 베이스를 쓴다 |
 | D1' | nginx 버전 | **`nginx:1.30.6-alpine`**, amd64 자식 `sha256:84ed8c0d…` | stable 브랜치(운영 권장) 최신. mainline 은 1.31.8. alpine 은 26MB 로 debian 변형보다 작고 필요한 기능(`map`·`include`·`proxy_pass`)은 같다 |
 | D1'' | 모델 고정 | 태그로 `ollama pull` 한 뒤 `ollama list` ID 가 핀한 매니페스트 다이제스트 앞 12자리와 다르면 빌드 실패. `verify-urls.sh` 가 레지스트리 매니페스트 sha256 을 핀과 대조한다 | `ollama pull` 은 다이제스트 지정을 지원하지 않는다. 태그가 다른 가중치로 바뀌면 조용히 다른 모델이 들어가므로 빌드 시점에 끊는다 |
-| D2 | 빌드 머신 | **인터넷이 되는 Linux x86_64 + Docker Engine(buildx) 호스트.** macOS 는 지원하지 않는다 | 사용자 로컬은 Apple Silicon(arm64)이다. amd64 이미지를 에뮬레이션으로 빌드하면 `RUN` 안의 `ollama serve`/`pull` 이 느리고 동작을 보장할 수 없다. 8~11GB tar 를 다시 VM 으로 옮겨야 하고, 기존 빌드 스크립트도 GNU 도구를 가정한다. `build-in-container.sh` 는 podman 안에 docker 데몬이 없어 `docker build` 를 못 하므로 쓰지 않는다 |
+| D2 | 빌드 머신 | **인터넷이 되는 Linux x86_64 + Docker Engine(buildx) 호스트.** macOS 는 지원하지 않는다 | 사용자 로컬은 Apple Silicon(arm64)이다. amd64 이미지를 에뮬레이션으로 빌드하면 `RUN` 안의 `ollama serve`/`pull` 이 느리고 동작을 보장할 수 없다. 8~11GB tar 를 다시 VM 으로 옮겨야 하고, 기존 빌드 스크립트도 GNU 도구를 가정한다. podman 빌드 컨테이너 안에는 docker 데몬이 없어 `docker build` 를 못 한다. 그래서 `build-in-container.sh` 는 이 단계만 컨테이너가 아니라 호스트 Docker 로 `build-bundle.sh` 를 실행한다(3절, 2026-11-06 변경) |
 | D3 | 컨테이너 런타임 | **Docker Engine + Compose 플러그인 v2.30 이상** | 저장소의 compose 컴포넌트(redis·pg·mssql·minio)가 모두 `docker compose` 이고 10-k8s 번들이 Docker 를 설치한다. NVIDIA 의 표준 경로가 Docker `--gpus` / compose `gpus:`(v2.30+)다. Podman 은 GPU 에 CDI 생성과 별도 compose 도구가 필요하다 |
 | D3' | 엔진·NVIDIA toolkit 번들 포함 | **포함하지 않는다.** Docker 는 전제 조건, GPU 는 드라이버 + toolkit 을 미리 설치(4.2절에 오프라인 준비 방법) | 엔진 deb 는 OS 버전별이고 10-k8s 가 이미 관리한다. 드라이버는 커널 버전에 묶이고 재부팅이 필요한 호스트 수준 변경이다 |
 | D4 | CPU/GPU 선택 | **빌드 시 flavor 별 번들을 따로 만든다.** 설치는 하드웨어에 맞는 번들 하나를 반입해 `sudo ./install.sh` 만 실행한다. GPU 번들은 GPU 사전 조건이 없으면 아무것도 바꾸기 전에 중단한다. 자동 감지로 이미지를 바꾸지 않는다 | 두 이미지 tar 합계가 약 20GB 라 한 현장에 둘 다 싣는 것은 낭비다. 번들이 곧 선택이므로 결과가 결정적이다. 사전 확인이 없으면 docker 가 `could not select device driver "nvidia"` 로 늦게 실패한다 |
@@ -88,6 +88,20 @@ cd offline-install
 cd 85-ollama-embedding
 ./build-bundle.sh                     # all = cpu + gpu (cpu | gpu 로 하나만)
 ```
+
+`00-common/build-in-container.sh` 로도 빌드할 수 있다. `all` 에 이 단계가 들어 있고, 단계 이름으로 직접 지정해도 된다.
+
+```bash
+./00-common/build-in-container.sh 24.04 85-ollama-embedding   # 또는 24.04 all
+```
+
+- 이 단계는 podman 컨테이너가 아니라 **호스트 Docker** 로 `./build-bundle.sh all`(cpu + gpu)을 실행한다(D2). 다른 단계가 있으면 컨테이너 단계가 끝난 뒤에 실행한다. OS 인자(`24.04`)는 이 단계에 영향이 없다. flavor 하나만 빌드하려면 위처럼 `build-bundle.sh cpu|gpu` 를 직접 실행한다.
+- 실행 계정이 docker 데몬에 접근하지 못하면 빌드 시작 때 docker 그룹 권한을 구성한다. `sudo docker` 로 우회하지 않는다.
+  - 이미 docker 그룹 회원(`/etc/group`)인데 지금 세션에만 그룹이 없으면(그룹 추가 전에 연 셸, tmux 서버) 아무것도 바꾸지 않고 `sg docker` 로 실행한다. 이때 번들 파일의 그룹은 `docker` 가 된다.
+  - 회원이 아니면 바꾸는 내용과 경고(**docker 그룹은 root 와 같은 권한**)를 출력하고 `sudo usermod -aG docker <계정>` 을 실행한 뒤 `sg docker` 로 실행한다. 확인은 묻지 않는다. stdin 이 터미널이 아니면 `sudo -n` 이라 암호가 필요하면 실패한다. 되돌리기는 `sudo gpasswd -d <계정> docker`.
+- 그래도 쓸 수 없으면 `WARN` 으로 원인과 조치를 출력하고 이 단계만 건너뛴다. 원인은 Docker 미설치, 데몬 접근 불가, sudo 불가, docker 그룹 없음, Linux x86_64 아님으로 나눠 출력한다. 종료 코드는 `all` 이면 영향이 없고, 단계로 직접 지정했으면 1 이다.
+- `build-bundle.sh` 를 직접 실행할 때는 예전처럼 docker 그룹이 아니면 `sudo docker` 로 실행한다.
+- 빌드 컨테이너 안에서 `build-bundle.sh` 를 실행하면 `FATAL 필요한 명령이 없다: docker` 로 멈춘다. 호스트의 `which docker` 가 정상이어도 컨테이너 안에는 docker 가 없다. 이 변경 전의 `build-in-container.sh` 에서 `ALL_STAGES` 에 이 단계를 직접 넣어 돌리면 이렇게 된다.
 
 `build-bundle.sh` 가 확인하는 것:
 

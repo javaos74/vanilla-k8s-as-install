@@ -139,14 +139,24 @@ cd offline-install
 # 1) 업스트림 다운로드 URL 생존 확인
 ./00-common/verify-urls.sh
 
-# 2) 번들 빌드 실행 (Ubuntu 24.04 기준 전체 빌드)
+# 2) 번들 빌드 실행 (Ubuntu 24.04 기준 전체 빌드, 85-ollama-embedding 포함)
 ./00-common/build-in-container.sh 24.04 all
 
 # 특정 컴포넌트만 빌드할 경우 예시:
 # ./00-common/build-in-container.sh 24.04 10-k8s 60-cilium 50-nfs-csi 30-harbor 20-minio
 # MinIO 대안(SeaweedFS) 번들만:
 # ./00-common/build-in-container.sh 26.04 21-seaweedfs
+# Ollama 임베딩 번들만 (호스트 Docker 로 빌드):
+# ./00-common/build-in-container.sh 24.04 85-ollama-embedding
 ```
+
+> [!NOTE]
+> `all` 에는 선택 컴포넌트 `85-ollama-embedding` 도 들어 있습니다. 이 단계만 podman 컨테이너가 아니라 **빌드 호스트의 Docker** 로 빌드합니다. 이미지 빌드 중에 `ollama serve`·`ollama pull` 로 모델을 넣는데, 빌드 컨테이너에는 docker 데몬이 없기 때문입니다([85 README](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/85-ollama-embedding/README.md) D2).
+>
+> - 컨테이너 단계가 모두 끝난 뒤 호스트에서 `85-ollama-embedding/build-bundle.sh all`(CPU 번들 + GPU 번들)을 실행합니다. 컨테이너 단계가 실패해도 이 단계는 실행합니다.
+> - 빌드 호스트 요건은 Linux x86_64, Docker Engine + buildx, RAM 16GB 이상, 디스크 약 80GB 입니다(85 README 3절). 이 단계만으로 약 23분이 더 걸립니다(85 README 3절 실측 1359초). Ollama 번들이 필요 없으면 `all` 대신 단계를 나열합니다.
+> - 실행 계정이 docker 를 쓸 수 없으면 빌드 시작 때 docker 그룹 권한을 구성합니다. 이미 docker 그룹 회원인데 지금 세션에만 그룹이 없으면(그룹 추가 전에 연 셸이나 tmux) 아무것도 바꾸지 않고 `sg docker` 로 실행합니다. 회원이 아니면 `sudo usermod -aG docker <계정>` 을 실행합니다. **docker 그룹은 root 와 같은 권한입니다.** 터미널이 아닌 곳에서 실행하면 sudo 암호를 묻지 않습니다(`sudo -n`).
+> - 그래도 호스트 Docker 를 쓸 수 없으면(Docker 미설치, 데몬 정지, sudo 불가, Linux x86_64 아님) `WARN` 으로 원인과 조치를 출력하고 85 만 건너뜁니다. 나머지 단계는 그대로 빌드합니다. 종료 코드는 `all` 이면 영향이 없고, `85-ollama-embedding` 을 단계로 직접 지정했으면 1 입니다.
 
 > [!IMPORTANT]
 > `10-k8s` 번들은 OS 의존적(deb 패키지)이므로 타깃 노드와 동일한 Ubuntu 버전(22.04 또는 24.04)에서 빌드해야 합니다. 나머지 번들은 컨테이너 이미지와 정적 파일 중심이므로 공용으로 사용 가능합니다.

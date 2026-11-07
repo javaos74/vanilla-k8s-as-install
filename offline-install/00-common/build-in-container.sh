@@ -8,6 +8,8 @@
 #   ./build-in-container.sh 24.04 20-minio 30-harbor 40-haproxy
 #   ./build-in-container.sh 26.04 21-seaweedfs
 #   ./build-in-container.sh 24.04 45-redis
+#   ./build-in-container.sh 24.04 38-istio
+#   ISTIO_LOCAL_IMAGES=1 ./build-in-container.sh 24.04 38-istio   # + 단일 노드 검증용 이미지 묶음
 #   ./build-in-container.sh 24.04 70-mssql
 #   ./build-in-container.sh 24.04 85-ollama-embedding
 #   ./build-in-container.sh 24.04 all
@@ -61,7 +63,7 @@ IMAGE="docker.io/library/ubuntu:${OSVER}"
 
 # OS 에 의존하는 단계는 10-k8s 뿐이다. 나머지는 어느 이미지에서 만들어도 같다.
 # 70-mssql·85-ollama-embedding 은 컨테이너가 아니라 호스트 Docker 로 빌드한다(머리말).
-ALL_STAGES=(10-k8s 20-minio 21-seaweedfs 30-harbor 35-metrics-server 40-haproxy 45-redis 50-nfs-csi 60-cilium 70-mssql 80-postgresql 85-ollama-embedding)
+ALL_STAGES=(10-k8s 20-minio 21-seaweedfs 30-harbor 35-metrics-server 38-istio 40-haproxy 45-redis 50-nfs-csi 60-cilium 70-mssql 80-postgresql 85-ollama-embedding)
 if [[ "$1" == "all" ]]; then
     STAGES=("${ALL_STAGES[@]}")
 else
@@ -390,9 +392,11 @@ INNER
 # --userns=keep-id 를 쓰지 않는다. 컨테이너 안에서 root 여야 apt 가 동작한다.
 # rootless podman 은 컨테이너의 root 를 호스트의 내 uid 로 매핑하므로
 # /work 에 쓴 파일은 호스트에서 내 소유로 보인다.
+# ISTIO_LOCAL_IMAGES=1 이면 38-istio 가 단일 노드 검증용 이미지 묶음도 만든다(기본 0).
 podman run --rm \
     -v "${REPO}:/work:z" \
     -e STAGES="${CTR_STAGES[*]}" \
+    -e ISTIO_LOCAL_IMAGES="${ISTIO_LOCAL_IMAGES:-0}" \
     "$IMAGE" \
     bash -c "$RUNNER" || finish $?
 

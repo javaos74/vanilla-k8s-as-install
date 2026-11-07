@@ -149,6 +149,37 @@ step "Metrics Server (registry.uipath.com 미러, 다이제스트 참조)"
 check "metrics-server 이미지 (${METRICS_SERVER_SOURCE_IMAGE##*:})" \
     image_ok "${METRICS_SERVER_SOURCE_IMAGE%:*}@${METRICS_SERVER_SOURCE_DIGEST}"
 
+step "Istio (38-istio, AS ${UIPATH_AS_VERSION} 번들과 같은 값)"
+# 이미지는 번들(검증용 묶음)이 실제로 받는 다이제스트 참조를, 차트는 태그를 확인한다.
+check "pilot 이미지 (${ISTIO_TAG})" \
+    image_ok "${ISTIO_PILOT_IMAGE%:*}@${ISTIO_PILOT_DIGEST}"
+check "proxyv2 이미지 (${ISTIO_TAG})" \
+    image_ok "${ISTIO_PROXYV2_IMAGE%:*}@${ISTIO_PROXYV2_DIGEST}"
+check "istio-wasm-plugin 이미지 (${UIPATH_WASM_TAG})" \
+    image_ok "${UIPATH_WASM_IMAGE%:*}@${UIPATH_WASM_DIGEST}"
+check "curl 이미지 (${UIPATH_ISTIO_CURL_TAG})" \
+    image_ok "${UIPATH_ISTIO_CURL_IMAGE%:*}@${UIPATH_ISTIO_CURL_DIGEST}"
+for c in "$ISTIO_BASE_CHART" "$ISTIO_ISTIOD_CHART" "$ISTIO_GATEWAY_CHART"; do
+    check "차트 ${c}:${ISTIO_CHART_VERSION}" image_ok "${ISTIO_SOURCE_REGISTRY}/${c}:${ISTIO_CHART_VERSION}"
+done
+check "차트 ${UIPATH_ISTIO_CONFIGURE_CHART}:${UIPATH_ISTIO_CONFIGURE_VERSION}" \
+    image_ok "${ISTIO_SOURCE_REGISTRY}/${UIPATH_ISTIO_CONFIGURE_CHART}:${UIPATH_ISTIO_CONFIGURE_VERSION}"
+
+# AS 번들 목록과 versions.env 의 Istio 값이 맞는지 대조한다. UIPATH_AS_VERSION 만 바꾸고
+# Istio 값을 그대로 두면 여기서 실패한다(versions.env Istio 절 주석).
+# 목록의 항목은 레지스트리 호스트가 없는 "<경로>:<태그>" 형식이다.
+as_list_has() { grep -qxF "$2" <<<"$1"; }
+AS_AIR="$(curl -fsSL --max-time 30 "${UIPATH_AS_DOWNLOAD_URL}/air-images.txt" 2>/dev/null | tr -d '\r' || true)"
+AS_CHARTS="$(curl -fsSL --max-time 30 "${UIPATH_AS_DOWNLOAD_URL}/embedded-helm-charts.txt" 2>/dev/null | tr -d '\r' || true)"
+for i in "$ISTIO_PILOT_IMAGE" "$ISTIO_PROXYV2_IMAGE" "$UIPATH_WASM_IMAGE" "$UIPATH_ISTIO_CURL_IMAGE"; do
+    check "AS ${UIPATH_AS_VERSION} air-images.txt 에 ${i#*/}" as_list_has "$AS_AIR" "${i#*/}"
+done
+for c in "${ISTIO_BASE_CHART}:${ISTIO_CHART_VERSION}" "${ISTIO_ISTIOD_CHART}:${ISTIO_CHART_VERSION}" \
+         "${ISTIO_GATEWAY_CHART}:${ISTIO_CHART_VERSION}" \
+         "${UIPATH_ISTIO_CONFIGURE_CHART}:${UIPATH_ISTIO_CONFIGURE_VERSION}"; do
+    check "AS ${UIPATH_AS_VERSION} embedded-helm-charts.txt 에 ${c}" as_list_has "$AS_CHARTS" "$c"
+done
+
 step "HAProxy"
 check "haproxy 이미지 ${HAPROXY_IMAGE}" image_ok "$HAPROXY_IMAGE"
 

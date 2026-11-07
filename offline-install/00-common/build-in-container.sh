@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
 #---------------------------------------------------------------------
 # 컨테이너에서 오프라인 번들을 만든다 (rootless podman, sudo 불필요)
-# 85-ollama-embedding 만 예외로 호스트 Docker 로 빌드한다(아래).
+# 70-mssql 과 85-ollama-embedding 은 예외로 호스트 Docker 로 빌드한다(아래).
 #
 #   ./build-in-container.sh 24.04 10-k8s
 #   ./build-in-container.sh 22.04 10-k8s
 #   ./build-in-container.sh 24.04 20-minio 30-harbor 40-haproxy
 #   ./build-in-container.sh 26.04 21-seaweedfs
 #   ./build-in-container.sh 24.04 45-redis
+#   ./build-in-container.sh 24.04 70-mssql
 #   ./build-in-container.sh 24.04 85-ollama-embedding
 #   ./build-in-container.sh 24.04 all
+#
+# 70-mssql 은 왜 호스트 Docker 인가:
+#   이미지는 빌드하지 않는다. 게시된 mssql-fts 이미지를 skopeo 로 다이제스트
+#   고정해 받는다. 받은 이미지에 FTS 가 들어 있는지 docker load + docker run 으로
+#   확인하는데(70-mssql/README.md 3절), 빌드 컨테이너에는 docker 가 없다.
+#   그래서 호스트 Docker 를 쓸 수 있으면 컨테이너 단계가 끝난 뒤(85 보다 먼저)
+#   호스트에서 70-mssql/build-bundle.sh 를 실행한다. 호스트 Docker 나 호스트
+#   skopeo 를 못 쓰면 경고하고 예전처럼 컨테이너에서 빌드한다. 이때는 FTS 포함
+#   확인만 건너뛰고 번들은 만들어지므로 종료 코드에 영향이 없다.
 #
 # 85-ollama-embedding 은 왜 호스트 Docker 인가:
 #   이미지 빌드 중에 ollama serve / ollama pull 로 모델을 이미지에 넣는다
@@ -50,7 +60,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="docker.io/library/ubuntu:${OSVER}"
 
 # OS 에 의존하는 단계는 10-k8s 뿐이다. 나머지는 어느 이미지에서 만들어도 같다.
-# 85-ollama-embedding 은 컨테이너가 아니라 호스트 Docker 로 빌드한다(머리말).
+# 70-mssql·85-ollama-embedding 은 컨테이너가 아니라 호스트 Docker 로 빌드한다(머리말).
 ALL_STAGES=(10-k8s 20-minio 21-seaweedfs 30-harbor 35-metrics-server 40-haproxy 45-redis 50-nfs-csi 60-cilium 70-mssql 80-postgresql 85-ollama-embedding)
 if [[ "$1" == "all" ]]; then
     STAGES=("${ALL_STAGES[@]}")
@@ -58,21 +68,33 @@ else
     STAGES=("$@")
 fi
 
-# 85-ollama-embedding 을 컨테이너 단계에서 뺀다.
+# 85-ollama-embedding 을 컨테이너 단계에서 뺀다. 70-mssql 은 일단 남겨 두고 표시만 한다.
 #   OLLAMA_MODE : "" = 요청 없음 / all = all 에 포함 / named = 단계로 직접 지정
+#   MSSQL_REQ   : "" = 요청 없음 / 1 = 요청됨(호스트에서 빌드할 수 없으면 컨테이너 단계에 남는다)
 # 셸 자동 완성이 붙이는 끝의 / 도 같은 단계로 본다.
 OLLAMA_MODE=""
+MSSQL_REQ=""
 CTR_STAGES=()
 for st in "${STAGES[@]}"; do
-    if [[ "${st%/}" == "85-ollama-embedding" ]]; then
-        if [[ "$1" == "all" ]]; then OLLAMA_MODE=all; else OLLAMA_MODE=named; fi
-    else
-        CTR_STAGES+=("$st")
-    fi
+    case "${st%/}" in
+        85-ollama-embedding)
+            if [[ "$1" == "all" ]]; then OLLAMA_MODE=all; else OLLAMA_MODE=named; fi
+            ;;
+        70-mssql)
+            MSSQL_REQ=1
+            CTR_STAGES+=("$st")
+            ;;
+        *)
+            CTR_STAGES+=("$st")
+            ;;
+    esac
 done
 
 #---------------------------------------------------------------------
-# 85-ollama-embedding 용 호스트 Docker 준비
+# 70-mssql·85-ollama-embedding 용 호스트 Docker 준비
+#
+# 두 단계가 함께 쓴다. 같은 계정·같은 데몬이라 판정이 같고, 따로 확인하면
+# usermod 안내와 sudo 암호 입력이 두 번 나올 수 있다.
 #
 # 실행 계정이 docker 데몬에 접근할 수 있게 한다. sudo docker 로 우회하지 않는다.
 #   1) 지금 프로세스로 docker info 가 되면 그대로 쓴다.
@@ -85,104 +107,189 @@ done
 # 컨테이너 단계보다 먼저 부른다. sudo 암호 입력과 경고가 긴 빌드의 끝이 아니라
 # 시작에 나오게 하려는 것이다.
 #
-# 결과: OLLAMA_RUN=direct|sg. 쓸 수 없으면 OLLAMA_SKIP(원인)·OLLAMA_FIX(조치)를
-# 남기고 1 을 돌려준다.
+# 입력: HOST_DOCKER_FOR(안내 문구에 넣을 단계 이름).
+# 결과: HOST_DOCKER_RUN=direct|sg. 쓸 수 없으면 HOST_DOCKER_SKIP(원인)·
+# HOST_DOCKER_FIX(조치)를 남기고 1 을 돌려준다. 단계별 WARN 은 부른 쪽이
+# 출력한다(mssql_skip, ollama_skip).
 #---------------------------------------------------------------------
+HOST_DOCKER_RUN="" HOST_DOCKER_SKIP="" HOST_DOCKER_FIX="" HOST_DOCKER_FOR=""
+MSSQL_RUN="" MSSQL_SKIP="" MSSQL_FIX=""
 OLLAMA_RUN="" OLLAMA_SKIP="" OLLAMA_FIX=""
+
+host_docker_unusable() {
+    HOST_DOCKER_SKIP="$1" HOST_DOCKER_FIX="$2"
+    return 1
+}
+
+# 70-mssql 은 건너뛰지 않고 컨테이너에서 빌드한다. 빠지는 것은 FTS 포함 확인뿐이다.
+mssql_skip() {
+    MSSQL_SKIP="$1" MSSQL_FIX="$2"
+    echo "WARN 호스트에서 70-mssql 을 빌드할 수 없어 빌드 컨테이너에서 빌드한다. 이미지의 FTS 포함 확인만 건너뛴다." >&2
+    echo "     원인: ${MSSQL_SKIP}" >&2
+    echo "     조치: ${MSSQL_FIX}" >&2
+}
 
 ollama_skip() {
     OLLAMA_SKIP="$1" OLLAMA_FIX="$2"
     echo "WARN 호스트 Docker 를 쓸 수 없어 85-ollama-embedding 을 건너뛴다. 나머지 단계는 계속한다." >&2
     echo "     원인: ${OLLAMA_SKIP}" >&2
     echo "     조치: ${OLLAMA_FIX}" >&2
-    return 1
 }
 
 prepare_host_docker() {
     local user err sudo_cmd=(sudo)
+    # 플랫폼·docker 미설치 조치는 85 가 요청되면 85 요건(buildx 포함)을 안내한다.
+    local fix_platform="Linux x86_64 + Docker 호스트에서 실행한다(70-mssql/README.md 4절)"
+    local fix_docker="Docker Engine 을 설치한다(70-mssql/README.md 4절)"
+    if [[ -n "$OLLAMA_MODE" ]]; then
+        fix_platform="Linux x86_64 + Docker 호스트에서 실행한다(85-ollama-embedding/README.md D2)"
+        fix_docker="Docker Engine + buildx 를 설치한다(85-ollama-embedding/README.md 3절)"
+    fi
     user="$(id -un)"
 
     [[ "$(uname -s)/$(uname -m)" == Linux/x86_64 ]] \
-        || { ollama_skip "Linux x86_64 빌드 호스트가 아니다(현재 $(uname -s)/$(uname -m))" \
-                 "Linux x86_64 + Docker 호스트에서 실행한다(85-ollama-embedding/README.md D2)"; return 1; }
+        || { host_docker_unusable "Linux x86_64 빌드 호스트가 아니다(현재 $(uname -s)/$(uname -m))" \
+                 "$fix_platform"; return 1; }
     command -v docker >/dev/null 2>&1 \
-        || { ollama_skip "이 호스트에 docker 명령이 없다(빌드 컨테이너가 아니라 호스트의 docker 를 쓴다)" \
-                 "Docker Engine + buildx 를 설치한다(85-ollama-embedding/README.md 3절)"; return 1; }
+        || { host_docker_unusable "이 호스트에 docker 명령이 없다(빌드 컨테이너가 아니라 호스트의 docker 를 쓴다)" \
+                 "$fix_docker"; return 1; }
 
     if err="$(docker info 2>&1 >/dev/null)"; then
-        OLLAMA_RUN=direct
+        HOST_DOCKER_RUN=direct
         echo "    docker 사용 가능 (계정 ${user})"
         return 0
     fi
     [[ "$err" == *"permission denied"* ]] \
-        || { ollama_skip "docker 데몬에 접근할 수 없다: $(head -n 1 <<<"$err")" \
+        || { host_docker_unusable "docker 데몬에 접근할 수 없다: $(head -n 1 <<<"$err")" \
                  "sudo systemctl status docker 로 데몬 상태를 확인하고 시작한다"; return 1; }
     getent group docker >/dev/null 2>&1 \
-        || { ollama_skip "docker 소켓 권한이 없고 이 호스트에 docker 그룹이 없다" \
+        || { host_docker_unusable "docker 소켓 권한이 없고 이 호스트에 docker 그룹이 없다" \
                  "ls -l /var/run/docker.sock 으로 소켓 소유 그룹을 확인한다"; return 1; }
     [[ " $(id -nG) " != *" docker "* ]] \
-        || { ollama_skip "docker 그룹으로 실행 중인데도 소켓 권한이 거부됐다: $(head -n 1 <<<"$err")" \
+        || { host_docker_unusable "docker 그룹으로 실행 중인데도 소켓 권한이 거부됐다: $(head -n 1 <<<"$err")" \
                  "ls -l /var/run/docker.sock 으로 소켓 소유 그룹이 docker 인지 확인한다"; return 1; }
 
     if [[ " $(id -nG "$user") " == *" docker "* ]]; then
         echo "    ${user} 는 docker 그룹 회원이지만 이 세션에는 그룹이 없다(그룹 추가 전에 연 셸이나 tmux)."
         echo "    다시 로그인하지 않아도 되도록 이번 빌드는 sg docker 로 실행한다. 바꾸는 것은 없다."
     else
-        echo "    ${user} 는 docker 그룹이 아니다. 85-ollama-embedding 빌드를 위해 다음을 실행한다:"
+        echo "    ${user} 는 docker 그룹이 아니다. ${HOST_DOCKER_FOR} 빌드를 위해 다음을 실행한다:"
         echo "      sudo usermod -aG docker ${user}"
         echo "    주의: docker 그룹은 root 와 같은 권한이다(컨테이너로 호스트 파일시스템을 마운트할 수 있다)."
         echo "    되돌리기: sudo gpasswd -d ${user} docker"
         [[ -t 0 ]] || sudo_cmd=(sudo -n)
         "${sudo_cmd[@]}" usermod -aG docker "$user" \
-            || { ollama_skip "${user} 를 docker 그룹에 추가하지 못했다(sudo 불가: 비밀번호 필요 또는 권한 없음)" \
+            || { host_docker_unusable "${user} 를 docker 그룹에 추가하지 못했다(sudo 불가: 비밀번호 필요 또는 권한 없음)" \
                      "관리자가 sudo usermod -aG docker ${user} 를 실행한 뒤 다시 실행한다"; return 1; }
         echo "    추가했다. 이미 열린 셸과 tmux 에는 다시 로그인해야 반영된다. 이번 빌드는 sg docker 로 실행한다."
     fi
 
     command -v sg >/dev/null 2>&1 \
-        || { ollama_skip "sg 명령이 없어 docker 그룹으로 실행할 수 없다" \
+        || { host_docker_unusable "sg 명령이 없어 docker 그룹으로 실행할 수 없다" \
                  "다시 로그인한 뒤(tmux 는 tmux kill-server 후) 다시 실행한다"; return 1; }
     err="$(sg docker -c 'docker info' 2>&1 >/dev/null)" \
-        || { ollama_skip "sg docker 로도 docker 에 접근하지 못했다: $(head -n 1 <<<"$err")" \
+        || { host_docker_unusable "sg docker 로도 docker 에 접근하지 못했다: $(head -n 1 <<<"$err")" \
                  "id -nG ${user} 에 docker 가 있는지, 다시 로그인한 셸에서 docker info 가 되는지 확인한다"; return 1; }
-    OLLAMA_RUN=sg
+    HOST_DOCKER_RUN=sg
     echo "    sg docker 로 docker 사용 가능"
 }
 
-# 컨테이너 단계의 결과(rc)를 받아, 요청됐으면 85-ollama-embedding 을 호스트 Docker 로
-# 빌드하고 종료한다. 컨테이너 단계가 실패해도 85 는 빌드한다(RUNNER 와 같은 방식).
-# 종료 코드: 컨테이너 단계 rc 가 0 이 아니면 그 값. 아니면 85 실패 시 1,
+# 컨테이너 단계의 결과(rc)를 받아, 요청됐으면 70-mssql, 85-ollama-embedding 순서로
+# 호스트 Docker 로 빌드하고 종료한다. 컨테이너 단계가 실패해도 둘은 빌드한다
+# (RUNNER 와 같은 방식).
+# 종료 코드: 컨테이너 단계 rc 가 0 이 아니면 그 값. 아니면 70 이나 85 실패 시 1,
 # 85 를 건너뛰었으면 직접 지정한 경우만 1(산출물이 없으므로), all 이면 0.
+# 70 을 컨테이너에서 빌드했으면(호스트 Docker 사용 불가) 컨테이너 rc 에 이미 들어 있다.
 finish() {
-    local rc="$1" orc=0
-    [[ -n "$OLLAMA_MODE" ]] || exit "$rc"
-    echo
-    echo "================ 85-ollama-embedding (호스트 Docker) ================"
-    case "$OLLAMA_RUN" in
-        direct)
-            echo "    호스트에서 실행: build-bundle.sh all (cpu + gpu)"
-            (cd "${REPO}/85-ollama-embedding" && ./build-bundle.sh all) || orc=$?
-            ;;
-        sg)
-            echo "    호스트에서 실행: sg docker -c 'build-bundle.sh all' (cpu + gpu)"
-            sg docker -c "$(printf 'cd %q && ./build-bundle.sh all' "${REPO}/85-ollama-embedding")" || orc=$?
-            ;;
-        *)
-            echo "  [SKIP] 85-ollama-embedding: ${OLLAMA_SKIP}"
-            echo "         조치: ${OLLAMA_FIX}"
-            [[ "$OLLAMA_MODE" == all ]] || orc=1
-            ;;
-    esac
-    if [[ -n "$OLLAMA_RUN" ]]; then
-        if ((orc == 0)); then echo "  [OK] 85-ollama-embedding"; else echo "  [FAIL] 85-ollama-embedding"; fi
+    local rc="$1" mrc=0 orc=0
+    [[ -n "$MSSQL_REQ" || -n "$OLLAMA_MODE" ]] || exit "$rc"
+    if [[ -n "$MSSQL_REQ" ]]; then
+        echo
+        echo "================ 70-mssql (호스트 Docker) ================"
+        case "$MSSQL_RUN" in
+            direct)
+                echo "    호스트에서 실행: build-bundle.sh"
+                (cd "${REPO}/70-mssql" && ./build-bundle.sh) || mrc=$?
+                ;;
+            sg)
+                echo "    호스트에서 실행: sg docker -c 'build-bundle.sh'"
+                sg docker -c "$(printf 'cd %q && ./build-bundle.sh' "${REPO}/70-mssql")" || mrc=$?
+                ;;
+            *)
+                echo "  [SKIP] 70-mssql FTS 포함 확인: ${MSSQL_SKIP}"
+                echo "         조치: ${MSSQL_FIX}"
+                echo "         70-mssql 번들은 빌드 컨테이너에서 빌드했다(결과는 위 컨테이너 출력)."
+                ;;
+        esac
+        if [[ -n "$MSSQL_RUN" ]]; then
+            if ((mrc == 0)); then echo "  [OK] 70-mssql"; else echo "  [FAIL] 70-mssql"; fi
+        fi
     fi
-    ((rc != 0 || orc == 0)) || rc=1
+    if [[ -n "$OLLAMA_MODE" ]]; then
+        echo
+        echo "================ 85-ollama-embedding (호스트 Docker) ================"
+        case "$OLLAMA_RUN" in
+            direct)
+                echo "    호스트에서 실행: build-bundle.sh all (cpu + gpu)"
+                (cd "${REPO}/85-ollama-embedding" && ./build-bundle.sh all) || orc=$?
+                ;;
+            sg)
+                echo "    호스트에서 실행: sg docker -c 'build-bundle.sh all' (cpu + gpu)"
+                sg docker -c "$(printf 'cd %q && ./build-bundle.sh all' "${REPO}/85-ollama-embedding")" || orc=$?
+                ;;
+            *)
+                echo "  [SKIP] 85-ollama-embedding: ${OLLAMA_SKIP}"
+                echo "         조치: ${OLLAMA_FIX}"
+                [[ "$OLLAMA_MODE" == all ]] || orc=1
+                ;;
+        esac
+        if [[ -n "$OLLAMA_RUN" ]]; then
+            if ((orc == 0)); then echo "  [OK] 85-ollama-embedding"; else echo "  [FAIL] 85-ollama-embedding"; fi
+        fi
+    fi
+    ((rc != 0 || (mrc == 0 && orc == 0))) || rc=1
     exit "$rc"
 }
 
-if [[ -n "$OLLAMA_MODE" ]]; then
-    echo "=== 85-ollama-embedding: 호스트 Docker 확인 ==="
-    prepare_host_docker || true
+# 호스트 Docker 확인. 컨테이너 단계보다 먼저 한 번만 한다.
+# 70-mssql 은 호스트에서 빌드할 수 있을 때만 컨테이너 단계에서 뺀다.
+if [[ -n "$MSSQL_REQ" || -n "$OLLAMA_MODE" ]]; then
+    label=""
+    [[ -z "$MSSQL_REQ" ]] || label="70-mssql"
+    [[ -z "$OLLAMA_MODE" ]] || label="${label:+${label}, }85-ollama-embedding"
+    echo "=== ${label}: 호스트 Docker 확인 ==="
+
+    # 호스트에서 70-mssql/build-bundle.sh 를 실행하면 skopeo 가 없을 때 sudo apt-get 으로
+    # 설치하려 한다. 컨테이너 경로에서는 필요 없던 일이므로, 없으면 호스트로 보내지 않는다.
+    # 플랫폼이 원인인 경우(macOS 등)는 prepare_host_docker 의 판정에 맡긴다.
+    mssql_host=""
+    if [[ -n "$MSSQL_REQ" ]]; then
+        if [[ "$(uname -s)/$(uname -m)" == Linux/x86_64 ]] && ! command -v skopeo >/dev/null 2>&1; then
+            mssql_skip "이 호스트에 skopeo 가 없다(호스트에서 빌드하면 70-mssql 이미지를 skopeo 로 받는다)" \
+                "skopeo 를 설치한 뒤 다시 실행한다(예: sudo apt-get install skopeo, 70-mssql/README.md 4절)"
+        else
+            mssql_host=1
+        fi
+    fi
+
+    HOST_DOCKER_FOR="${mssql_host:+70-mssql}"
+    [[ -z "$OLLAMA_MODE" ]] || HOST_DOCKER_FOR="${HOST_DOCKER_FOR:+${HOST_DOCKER_FOR}, }85-ollama-embedding"
+    if [[ -n "$HOST_DOCKER_FOR" ]]; then
+        if prepare_host_docker; then
+            if [[ -n "$mssql_host" ]]; then
+                MSSQL_RUN="$HOST_DOCKER_RUN"
+                rest=()
+                for st in "${CTR_STAGES[@]}"; do
+                    [[ "${st%/}" == 70-mssql ]] || rest+=("$st")
+                done
+                CTR_STAGES=(${rest[@]+"${rest[@]}"})
+            fi
+            [[ -z "$OLLAMA_MODE" ]] || OLLAMA_RUN="$HOST_DOCKER_RUN"
+        else
+            [[ -z "$mssql_host" ]] || mssql_skip "$HOST_DOCKER_SKIP" "$HOST_DOCKER_FIX"
+            [[ -z "$OLLAMA_MODE" ]] || ollama_skip "$HOST_DOCKER_SKIP" "$HOST_DOCKER_FIX"
+        fi
+    fi
     echo
 fi
 
@@ -201,6 +308,13 @@ echo "=== 빌드 환경 ==="
 echo "  이미지 : ${IMAGE}"
 echo "  저장소 : ${REPO}"
 echo "  단계   : ${CTR_STAGES[*]}"
+if [[ -n "$MSSQL_REQ" ]]; then
+    if [[ -n "$MSSQL_RUN" ]]; then
+        echo "  호스트 : 70-mssql (호스트 Docker, 컨테이너 단계 뒤에 실행)"
+    else
+        echo "  호스트 : 70-mssql 은 컨테이너에서 빌드 (FTS 포함 확인 건너뜀, 위 WARN 참고)"
+    fi
+fi
 if [[ -n "$OLLAMA_MODE" ]]; then
     if [[ -n "$OLLAMA_RUN" ]]; then
         echo "  호스트 : 85-ollama-embedding (호스트 Docker, 컨테이너 단계 뒤에 실행)"

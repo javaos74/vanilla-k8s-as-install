@@ -144,6 +144,14 @@ mssql-16.0.4265.3/
 `build-bundle.sh` 는 받은 이미지에 `mssql-server-fts` 가 실제로 있는지
 `dpkg -l` 로 확인한다. 타깃에서 알게 되면 되돌리기 비싸다.
 
+이 확인은 `docker load` 뒤 `docker run --entrypoint dpkg` 로 하므로 **docker 데몬이
+필요하다**(SQL Server 는 띄우지 않는다). FTS 가 없다고 확인되면 번들 tar 를 만들기
+전에 실패한다. docker 를 쓸 수 없으면 `WARN docker 를 쓸 수 없어 FTS 포함 여부를
+확인하지 못했다.` 를 내고 확인만 건너뛴 채 번들을 만든다.
+
+번들 빌드는 이미지를 빌드하지 않는다. 게시된 이미지를 다이제스트로 받을 뿐이다.
+이미지 빌드와 게시는 1절의 `fts-image/` 로 사람이 따로 한다.
+
 ---
 
 ## 4. 설치
@@ -151,6 +159,8 @@ mssql-16.0.4265.3/
 ```bash
 # 빌드 호스트(인터넷 O)
 cd offline-install/70-mssql && ./build-bundle.sh
+# 또는 빌드 래퍼로(호스트 Docker 로 실행된다, 아래)
+cd offline-install && ./00-common/build-in-container.sh 24.04 70-mssql
 
 # 타깃 노드(에어갭)
 scp bundle/mssql-*.tar.gz{,.sha256} <타깃>:~/
@@ -162,6 +172,32 @@ sudo ./install.sh                                 # 최초 기동은 DB 생성�
 ```
 
 옵션은 `--check-only`, `--test-restart`, `--uninstall`(데이터 보존) 이다.
+
+### `build-in-container.sh` 로 빌드할 때
+
+`./00-common/build-in-container.sh 24.04 70-mssql`(또는 `all`)로 빌드하면 이 단계는
+podman 빌드 컨테이너가 아니라 **빌드 호스트에서** `build-bundle.sh` 를 실행한다.
+빌드 컨테이너에는 docker 가 없어 3절의 FTS 포함 확인을 할 수 없기 때문이다.
+호스트에서 실행하므로 OS 인자(`24.04`)는 결과에 영향이 없다.
+
+- 요건: Linux x86_64, Docker Engine, skopeo. 실행 계정이 `docker info` 를 할 수 있어야 한다.
+- 실행 계정이 docker 를 쓸 수 없으면 빌드 시작 때 docker 그룹 권한을 구성한다
+  (`sg docker` 또는 `sudo usermod -aG docker <계정>`,
+  [`offline-install/README.md`](../README.md) 2.2절). `sg docker` 로 실행하면 번들 파일의
+  그룹이 `docker` 가 된다.
+- 컨테이너 단계가 끝난 뒤, `85-ollama-embedding` 보다 먼저 실행한다. 출력에서는
+  `================ 70-mssql (호스트 Docker) ================` 아래에 나온다.
+- 호스트 Docker 나 skopeo 를 쓸 수 없으면 다음을 출력하고 예전처럼 빌드 컨테이너에서
+  빌드한다. 번들 tar 와 sha256 은 만들어지고 종료 코드는 그대로다. 끝에
+  `[SKIP] 70-mssql FTS 포함 확인` 이 다시 나온다.
+  ```
+  WARN 호스트에서 70-mssql 을 빌드할 수 없어 빌드 컨테이너에서 빌드한다. 이미지의 FTS 포함 확인만 건너뛴다.
+       원인: <미설치, 데몬 접근 불가, 권한, skopeo 없음 등>
+       조치: <할 일>
+  ```
+- 확인을 위해 `docker load` 한 이미지가 호스트 Docker 에 남는다(직접 실행할 때와 같다).
+  지우려면 `docker image rm docker.io/javaos74/mssql-fts:2022-16.0.4265.3`.
+- `BUNDLE-INFO` 의 `built_on` 은 컨테이너 ID 가 아니라 호스트 이름이 된다.
 
 ### 설정 값 (`site.env`)
 

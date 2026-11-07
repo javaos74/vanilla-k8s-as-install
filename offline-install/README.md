@@ -146,17 +146,33 @@ cd offline-install
 # ./00-common/build-in-container.sh 24.04 10-k8s 60-cilium 50-nfs-csi 30-harbor 20-minio
 # MinIO 대안(SeaweedFS) 번들만:
 # ./00-common/build-in-container.sh 26.04 21-seaweedfs
+# SQL Server(FTS) 번들만 (호스트 Docker 로 빌드해 FTS 포함 확인):
+# ./00-common/build-in-container.sh 24.04 70-mssql
 # Ollama 임베딩 번들만 (호스트 Docker 로 빌드):
 # ./00-common/build-in-container.sh 24.04 85-ollama-embedding
 ```
 
+빌드 컨테이너(`ubuntu:<버전>`)에는 docker 가 없습니다. 대부분의 단계는 이미 있는 것을 내려받아 tar 로 묶기만 하므로 docker 데몬이 필요 없습니다. 이미지는 skopeo 가 레지스트리에서 파일로 바로 받습니다(`docker://`, `docker-archive:` 는 skopeo 의 전송 형식 이름이고 docker 데몬과 관계가 없습니다). 단계별 실행 위치는 다음과 같습니다.
+
+| 단계 | 실행 위치 | 이미지·파일을 얻는 방법 | docker 데몬 |
+|---|---|---|---|
+| 10-k8s, 20-minio, 21-seaweedfs, 30-harbor, 35-metrics-server, 40-haproxy, 50-nfs-csi, 60-cilium, 80-postgresql | podman 빌드 컨테이너 | skopeo(이미지), apt(deb), curl(바이너리·차트·인스톨러) | 필요 없음 |
+| 45-redis | 컨테이너에서 빌드할 단계가 45-redis 하나뿐이면 호스트에서 바로 실행(podman 안 씀). 아니면 빌드 컨테이너 | skopeo | 필요 없음 |
+| 70-mssql | 호스트 Docker 를 쓸 수 있으면 호스트(컨테이너 단계 뒤). 아니면 빌드 컨테이너 | skopeo(게시된 `mssql-fts` 이미지, 다이제스트 고정). 이미지는 빌드하지 않음 | 받은 이미지의 FTS 포함 확인에만 씀 |
+| 85-ollama-embedding | 호스트 Docker(컨테이너 단계와 70-mssql 뒤) | `docker build`(모델을 이미지에 넣음), skopeo(nginx) | 필요 |
+
 > [!NOTE]
-> `all` 에는 선택 컴포넌트 `85-ollama-embedding` 도 들어 있습니다. 이 단계만 podman 컨테이너가 아니라 **빌드 호스트의 Docker** 로 빌드합니다. 이미지 빌드 중에 `ollama serve`·`ollama pull` 로 모델을 넣는데, 빌드 컨테이너에는 docker 데몬이 없기 때문입니다([85 README](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/85-ollama-embedding/README.md) D2).
+> `70-mssql` 과 `85-ollama-embedding` 은 podman 컨테이너가 아니라 **빌드 호스트의 Docker** 로 빌드합니다. 빌드 컨테이너에는 docker 데몬이 없기 때문입니다. 컨테이너 단계가 모두 끝난 뒤 호스트에서 70-mssql, 85 순서로 실행하고, 컨테이너 단계가 실패해도 실행합니다. 호스트에서 실행하므로 OS 인자(`24.04` 등)의 영향을 받지 않습니다. `all` 에는 선택 컴포넌트 `85-ollama-embedding` 도 들어 있습니다.
 >
-> - 컨테이너 단계가 모두 끝난 뒤 호스트에서 `85-ollama-embedding/build-bundle.sh all`(CPU 번들 + GPU 번들)을 실행합니다. 컨테이너 단계가 실패해도 이 단계는 실행합니다.
-> - 빌드 호스트 요건은 Linux x86_64, Docker Engine + buildx, RAM 16GB 이상, 디스크 약 80GB 입니다(85 README 3절). 이 단계만으로 약 23분이 더 걸립니다(85 README 3절 실측 1359초). Ollama 번들이 필요 없으면 `all` 대신 단계를 나열합니다.
-> - 실행 계정이 docker 를 쓸 수 없으면 빌드 시작 때 docker 그룹 권한을 구성합니다. 이미 docker 그룹 회원인데 지금 세션에만 그룹이 없으면(그룹 추가 전에 연 셸이나 tmux) 아무것도 바꾸지 않고 `sg docker` 로 실행합니다. 회원이 아니면 `sudo usermod -aG docker <계정>` 을 실행합니다. **docker 그룹은 root 와 같은 권한입니다.** 터미널이 아닌 곳에서 실행하면 sudo 암호를 묻지 않습니다(`sudo -n`).
-> - 그래도 호스트 Docker 를 쓸 수 없으면(Docker 미설치, 데몬 정지, sudo 불가, Linux x86_64 아님) `WARN` 으로 원인과 조치를 출력하고 85 만 건너뜁니다. 나머지 단계는 그대로 빌드합니다. 종료 코드는 `all` 이면 영향이 없고, `85-ollama-embedding` 을 단계로 직접 지정했으면 1 입니다.
+> - **70-mssql**: 이미지는 빌드하지 않고 게시된 `docker.io/javaos74/mssql-fts` 를 skopeo 로 다이제스트 고정해 받습니다. docker 는 받은 이미지에 FTS 가 들어 있는지 확인(`docker load` 후 `docker run --entrypoint dpkg ... -l mssql-server-fts`)할 때만 씁니다([70 README](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/70-mssql/README.md) 3·4절). FTS 가 없으면 번들을 만들기 전에 실패합니다.
+>   - 빌드 호스트 요건은 Linux x86_64, Docker Engine, skopeo 입니다.
+>   - 호스트 Docker 나 호스트 skopeo 를 쓸 수 없으면 `WARN` 으로 원인과 조치를 출력하고 예전처럼 빌드 컨테이너에서 빌드합니다. 이때는 FTS 포함 확인만 건너뛰고 번들 tar 와 sha256 은 만들어집니다. 종료 코드에 영향이 없습니다. 끝에 `[SKIP] 70-mssql FTS 포함 확인` 이 다시 나옵니다.
+>   - 확인을 위해 `docker load` 한 이미지가 호스트 Docker 에 남습니다. 지우려면 `docker image rm docker.io/javaos74/mssql-fts:2022-16.0.4265.3` 을 실행합니다.
+> - **85-ollama-embedding**: 이미지 빌드 중에 `ollama serve`·`ollama pull` 로 모델을 넣습니다([85 README](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/85-ollama-embedding/README.md) D2). 호스트에서 `85-ollama-embedding/build-bundle.sh all`(CPU 번들 + GPU 번들)을 실행합니다.
+>   - 빌드 호스트 요건은 Linux x86_64, Docker Engine + buildx, RAM 16GB 이상, 디스크 약 80GB 입니다(85 README 3절). 이 단계만으로 약 23분이 더 걸립니다(85 README 3절 실측 1359초). Ollama 번들이 필요 없으면 `all` 대신 단계를 나열합니다.
+>   - 그래도 호스트 Docker 를 쓸 수 없으면(Docker 미설치, 데몬 정지, sudo 불가, Linux x86_64 아님) `WARN` 으로 원인과 조치를 출력하고 85 만 건너뜁니다. 나머지 단계는 그대로 빌드합니다. 종료 코드는 `all` 이면 영향이 없고, `85-ollama-embedding` 을 단계로 직접 지정했으면 1 입니다.
+> - 70-mssql 이나 85 를 빌드할 때 실행 계정이 docker 를 쓸 수 없으면, 빌드 시작 때 한 번 docker 그룹 권한을 구성합니다. 이미 docker 그룹 회원인데 지금 세션에만 그룹이 없으면(그룹 추가 전에 연 셸이나 tmux) 아무것도 바꾸지 않고 `sg docker` 로 실행합니다. 이때 번들 파일의 그룹은 `docker` 가 됩니다. 회원이 아니면 `sudo usermod -aG docker <계정>` 을 실행합니다. **docker 그룹은 root 와 같은 권한입니다.** 터미널이 아닌 곳에서 실행하면 sudo 암호를 묻지 않습니다(`sudo -n`).
+> - 45-redis 와 70-mssql 만 지정하고 호스트 Docker 를 쓸 수 있으면 컨테이너 단계가 45-redis 하나만 남으므로 45-redis 도 podman 없이 호스트에서 빌드합니다.
 
 > [!IMPORTANT]
 > `10-k8s` 번들은 OS 의존적(deb 패키지)이므로 타깃 노드와 동일한 Ubuntu 버전(22.04 또는 24.04)에서 빌드해야 합니다. 나머지 번들은 컨테이너 이미지와 정적 파일 중심이므로 공용으로 사용 가능합니다.

@@ -377,6 +377,20 @@ CU25 고정본(`2022-cu25`)은 이번에 새로 빌드해 게시했고, **로그
 floating 태그 `2022` 는 **일부러 건드리지 않았다.** 그 태그는 CU26 을 가리킨다.
 CU25 를 거기에 덮으면 `:2022` 를 받는 모든 곳이 조용히 CU25 로 내려앉는다.
 
+### `build-in-container.sh` 호스트 Docker 빌드 (`charles-weed` VM, 2026-11-07)
+
+Ubuntu 24.04.5 테스트 VM `charles-weed`(x86_64, Docker 29.8.1, skopeo 1.13.3, 메모리 3.7GiB)에서
+`./00-common/build-in-container.sh 24.04 70-mssql` 을 docker 그룹이 있는 `ubuntu` 계정으로
+실행했다(4절 "`build-in-container.sh` 로 빌드할 때"). 빌드만 했고 설치는 하지 않았다.
+
+| 항목 | 결과 |
+|---|---|
+| 실행 위치 | 호스트(`docker 사용 가능 (계정 ubuntu)`, `호스트에서 실행: build-bundle.sh`). podman 컨테이너는 띄우지 않았다 |
+| 이미지에 FTS 포함 확인 | **통과** (`OK mssql-server-fts 설치 확인`, `OK sqlcmd 존재: /opt/mssql-tools18/bin/sqlcmd`) |
+| 번들 | `mssql-16.0.4265.3.tar.gz` 1,332,972,382 B(1.3G), `sha256sum -c` OK |
+| 소요 시간 | 387초(이미지 받기 74초, FTS 확인 99초, 패키징 214초) |
+| 호스트 Docker 에 남은 이미지 | `javaos74/mssql-fts:2022-16.0.4265.3`, 디스크 7.26GB(containerd 이미지 저장소) |
+
 ---
 
 ## 9. 트러블슈팅

@@ -122,8 +122,17 @@ kubectl -n istio-system get svc istio-ingressgateway \
   -o jsonpath="{.spec.ports[?(@.name=='https')].nodePort}"
 ```
 
-서비스가 없으면 기본값(`http2=31223`, `https=31164`, `status-port=31956`)을 쓰고
-경고를 남긴다. **게이트웨이 설치 후 이 스크립트를 다시 실행하면 실제 값으로 갱신된다.**
+네임스페이스와 서비스 이름은 `versions.env` 의 `ISTIO_NAMESPACE`(`istio-system`),
+`ISTIO_GATEWAY_NAME`(`istio-ingressgateway`)이다.
+
+서비스가 없으면 기본값을 쓰고 경고를 남긴다. 기본값은 `versions.env` 의
+`ISTIO_NODEPORT_HTTP` / `ISTIO_NODEPORT_HTTPS` / `ISTIO_NODEPORT_STATUS`
+(`http2=31223`, `https=31164`, `status-port=31956`, `site.env` 로 바꿀 수 있다)다.
+**`38-istio` 가 ingressgateway 를 같은 값으로 고정한다.** 그래서 Istio 보다 먼저 설치해도
+백엔드 포트가 맞는다. NodePort 를 바꾸면 두 번들을 같은 `site.env` 로 다시 빌드한다.
+**게이트웨이 설치 후 이 스크립트를 다시 실행하면 실제 값으로 갱신된다.**
+그 뒤 `38-istio` 의 `install.sh --check-only` 가 HAProxy 경유 80/443/15021 까지 판정한다
+(`38-istio/README.md` 8절).
 
 기존 운영 클러스터의 cfg 에는 서버 레이블이 `k8s-01/02/03` 인데 실제 IP 는
 `NODE-07/05/04` 였다. 이름과 실체가 어긋나면 장애 시 로그 해석을 오도한다.
@@ -193,12 +202,12 @@ stats 응답(127.0.0.1:8404)
 Permission denied 상태에서 이 판정이 통과해버렸다. 그래서 PID 유지까지 확인한다.
 
 **백엔드 UP/DOWN 은 판정 항목이 아니다.** 정보로만 출력한다.
-ingress gateway 는 UiPath AS 설치 단계에서 들어오므로, 이 단계에서는 없는 것이
-정상이고 백엔드는 DOWN 으로 보인다. 스크립트가 그 사실을 구분해 알려준다.
+ingress gateway 는 `38-istio` 에서 설치하므로, 그 전에는 없는 것이 정상이고
+백엔드는 DOWN 으로 보인다. 스크립트가 그 사실을 구분해 알려준다.
 
 ```
 [INFO] ingress gateway 서비스가 없다. 백엔드 DOWN 은 정상이다.
-         (게이트웨이는 UiPath AS 설치 단계에서 들어온다)
+         (게이트웨이는 38-istio 에서 설치한다. README 5.3절)
 ```
 
 ---
@@ -256,4 +265,9 @@ sudo ./install.sh --check-only     # 판정만
 
 ```
 10-k8s  →  60-cilium  →  50-nfs-csi  →  [40-haproxy]  →  30-harbor  →  20-minio
+        →  (AS hydrate, 상위 README 5.2)  →  38-istio  →  [40-haproxy 재실행]
+        →  38-istio install.sh --check-only
 ```
+
+`38-istio` 로 ingressgateway 를 설치한 뒤 이 스크립트를 한 번 더 실행해 NodePort 를
+반영하고 백엔드 UP 을 확인한다(상위 README 5.3.5절).

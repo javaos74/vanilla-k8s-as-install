@@ -549,6 +549,11 @@ sudo ./install.sh                                                 # 키 자동 �
        "docker": { "url": "harbor.myrobots.co.kr/uipath", "username": "username", "password": "password" },
        "helm": { "url": "harbor.myrobots.co.kr/uipath", "username": "username", "password": "password"  }
      },
+     "cluster_type": "exclusive",
+     "kubernetes_distribution": "vanilla",
+     "zone_resilience": false,
+     "telemetry_optout": false,
+     "fips_enabled_nodes": false,
      "fqdn": "as2510.myrobots.co.kr",
      "profile": "default",
      "namespace": "uipath",
@@ -570,6 +575,9 @@ sudo ./install.sh                                                 # 키 자동 �
        "region": "us-east-1",
        "create_bucket": true
      },
+     "storage_class": "csi-nfs",
+     "storage_class_single_replica": "csi-nfs",
+     "storage_class_name_with_rwx_support": "csi-nfs",
      "sql": {
        "create_db": true,
        "server_url": "10.32.99.4",

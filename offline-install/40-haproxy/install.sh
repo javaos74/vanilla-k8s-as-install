@@ -10,7 +10,7 @@
 # 전제: 10-k8s 설치 완료(docker 포함).
 #
 # ingress gateway 가 아직 없어도 설치된다. 그 경우 백엔드는 DOWN 으로 보이며
-# 이것이 정상이다(게이트웨이는 UiPath AS 설치 시 들어온다).
+# 이것이 정상이다(게이트웨이는 38-istio 에서 설치한다. README 5.3절).
 #---------------------------------------------------------------------
 BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${BUNDLE_ROOT}/00-common/common.sh"
@@ -33,9 +33,11 @@ HOST_CFG_DIR="/etc/haproxy-l4"
 HOST_CFG="${HOST_CFG_DIR}/haproxy.cfg"
 
 # ingress gateway NodePort 기본값. 서비스가 있으면 자동 탐지가 이 값을 덮어쓴다.
-DEFAULT_NP_HTTP=31223
-DEFAULT_NP_HTTPS=31164
-DEFAULT_NP_STATUS=31956
+# 값은 versions.env 의 ISTIO_NODEPORT_*(기본 31223/31164/31956)이고, 38-istio 가
+# 같은 값으로 gateway NodePort 를 고정한다. 그래서 Istio 보다 먼저 설치해도 맞는다.
+DEFAULT_NP_HTTP="${ISTIO_NODEPORT_HTTP}"
+DEFAULT_NP_HTTPS="${ISTIO_NODEPORT_HTTPS}"
+DEFAULT_NP_STATUS="${ISTIO_NODEPORT_STATUS}"
 
 #=====================================================================
 # 판정
@@ -84,12 +86,12 @@ run_checks() {
           | awk -F, 'NR>1 && $2!="" && $1!="stats" {printf "    %-12s %-8s %s\n", $1, $2, $18}'
     fi
 
-    if kubectl --kubeconfig /etc/kubernetes/admin.conf get svc -n istio-system \
-            istio-ingressgateway >/dev/null 2>&1; then
+    if kubectl --kubeconfig /etc/kubernetes/admin.conf get svc -n "${ISTIO_NAMESPACE}" \
+            "${ISTIO_GATEWAY_NAME}" >/dev/null 2>&1; then
         log "ingress gateway 서비스가 존재한다. 백엔드가 UP 이어야 정상이다."
     else
         log "ingress gateway 서비스가 없다. 백엔드 DOWN 은 정상이다."
-        log "  (게이트웨이는 UiPath AS 설치 단계에서 들어온다)"
+        log "  (게이트웨이는 38-istio 에서 설치한다. README 5.3절)"
     fi
 
     check_summary
@@ -219,10 +221,10 @@ step "설정 생성"
 NP_HTTP="$DEFAULT_NP_HTTP"; NP_HTTPS="$DEFAULT_NP_HTTPS"; NP_STATUS="$DEFAULT_NP_STATUS"
 
 KC=/etc/kubernetes/admin.conf
-if [[ -f "$KC" ]] && kubectl --kubeconfig "$KC" get svc -n istio-system istio-ingressgateway >/dev/null 2>&1; then
+if [[ -f "$KC" ]] && kubectl --kubeconfig "$KC" get svc -n "${ISTIO_NAMESPACE}" "${ISTIO_GATEWAY_NAME}" >/dev/null 2>&1; then
     # 실제 서비스가 있으면 그 값을 쓴다. 고정값을 쓰다 어긋나는 것을 막는다.
     get_np() {
-        kubectl --kubeconfig "$KC" -n istio-system get svc istio-ingressgateway \
+        kubectl --kubeconfig "$KC" -n "${ISTIO_NAMESPACE}" get svc "${ISTIO_GATEWAY_NAME}" \
             -o jsonpath="{.spec.ports[?(@.name=='$1')].nodePort}" 2>/dev/null
     }
     v="$(get_np http2)";  [[ -n "$v" ]] && NP_HTTP="$v"

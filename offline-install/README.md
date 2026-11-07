@@ -546,8 +546,8 @@ sudo ./install.sh                                                 # 키 자동 �
    ```json
    {
      "registries": {
-       "docker": { "url": "harbor.myrobots.co.kr/uipath" },
-       "helm": { "url": "harbor.myrobots.co.kr/uipath" }
+       "docker": { "url": "harbor.myrobots.co.kr/uipath", "username": "username", "password": "password" },
+       "helm": { "url": "harbor.myrobots.co.kr/uipath", "username": "username", "password": "password"  }
      },
      "fqdn": "as2510.myrobots.co.kr",
      "profile": "default",

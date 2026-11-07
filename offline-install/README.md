@@ -34,8 +34,11 @@ flowchart TD
     end
 
     subgraph Phase3["Phase 3: UiPath Automation Suite 설치"]
-        AS1["uipathctl 및 input.json 준비\n(Harbor, MinIO, DB 정보 기입)"] --> AS2["Harbor 레지스트리로\nAS 오프라인 이미지 Seed"]
-        AS2 --> AS3["uipathctl prereq run\n사전 요구조건 점검"]
+        AS1["uipathctl 및 input.json 준비\n(Harbor, MinIO, DB 정보 기입,\nexclude_components · ingress)"] --> AS2["AS 오프라인 번들 hydrate\n(hydrate-registry.sh → Harbor uipath)"]
+        AS2 --> IS1["38-istio Istio 설치\n(base · istiod · ingressgateway,\nNodePort 고정)"]
+        IS1 --> IS2["38-istio istio-configure\n(WASM 라우팅 플러그인)"]
+        IS2 --> IS3["40-haproxy 재실행\n(NodePort 반영, 경유 판정)"]
+        IS3 --> AS3["uipathctl prereq run\n사전 요구조건 점검"]
         AS3 --> AS4["uipathctl prereq create\nDB 및 S3 버킷 자동 생성"]
         AS4 --> AS5["uipathctl manifest apply\nAutomation Suite 배포 실행"]
         AS5 --> AS6["uipathctl health 및 포털 검증"]
@@ -64,6 +67,7 @@ flowchart TD
 | **Object Storage** | MinIO `RELEASE.2025-09-07` | Docker Compose (SNSD 단일 노드) | S3 호환, TLS 적용. AGPL-3.0, quay.io 이미지 401(2026-10-17) |
 | **Object Storage (대안)** | SeaweedFS **4.48** | Docker Compose (`weed server` 단일 노드) | Apache-2.0, S3 TLS 전용. 실서버에서 `install.sh` 판정 36/36 통과(4.3.1절). 사내 CA 인증서·브라우저 CORS 적용. AS 연계는 미검증. 판정 수정(`data_written`)을 더한 지금 코드는 미실행 |
 | **Registry** | Harbor **v2.15.2** | 공식 오프라인 인스톨러 + systemd | HTTPS(443) 전용, 자동 복구 스크립트 |
+| **Service Mesh (Istio)** | **1.30.3** (AS 2.2510.4 번들, Echo 재빌드 `1.30.3-20260730_echo`) / vendor/base·istiod·gateway **v1.30.3** | Helm 차트 (`38-istio`, hydrate 된 Harbor 경유) | UiPath 2.2510 [호환성 매트릭스](https://docs.uipath.com/automation-suite/automation-suite/2.2510/installation-guide-eks-aks/compatibility-matrix)와 AS 2.2510.4 번들의 버전. 이미지는 echohq.com 재빌드. [ISTIO-SECURITY-2026-006~009](https://istio.io/latest/news/security/) 수정은 upstream 1.30.8 에만 있고, Echo 재빌드 이미지에 2026-006~009 수정이 들어 있는지는 확인하지 못했습니다(미확인). 사용자가 이 위험을 알고 UiPath 배포 버전을 골랐습니다. 1.30 EOL 예정 2026-12경, k8s 1.32~1.36 지원([supported-releases](https://istio.io/latest/docs/releases/supported-releases/)). 다이제스트 고정. UiPath 래퍼 `helm/istiod` 대신 `vendor/istiod` 를 씁니다(렌더링 결과가 같음, 38-istio README 2.2절). `UIPATH_AS_VERSION` 을 바꾸면 Istio 값도 함께 바꿉니다(5.3.1절) |
 | **L4 Load Balancer** | HAProxy **3.1** | Docker (`--network host`) | 80/443/15021 TCP 패스스루 |
 | **Database** | SQL Server 2022 (CU25/CU26) / PostgreSQL 16 | Docker 커스텀 이미지 / Docker Compose | MSSQL은 **Full-Text Search(FTS)** 내장 필수, PG는 TLS 적용 |
 | **Cache** | Redis OSS **7.4** | Docker Compose | TLS 활성화, 단일 노드 |
@@ -150,13 +154,17 @@ cd offline-install
 # ./00-common/build-in-container.sh 24.04 70-mssql
 # Ollama 임베딩 번들만 (호스트 Docker 로 빌드):
 # ./00-common/build-in-container.sh 24.04 85-ollama-embedding
+# Istio(38-istio) 번들만 (운영 번들, 이미지 없음):
+# ./00-common/build-in-container.sh 24.04 38-istio
+# 단일 노드 검증용 이미지 묶음까지 (--source local 용):
+# ISTIO_LOCAL_IMAGES=1 ./00-common/build-in-container.sh 24.04 38-istio
 ```
 
 빌드 컨테이너(`ubuntu:<버전>`)에는 docker 가 없습니다. 대부분의 단계는 이미 있는 것을 내려받아 tar 로 묶기만 하므로 docker 데몬이 필요 없습니다. 이미지는 skopeo 가 레지스트리에서 파일로 바로 받습니다(`docker://`, `docker-archive:` 는 skopeo 의 전송 형식 이름이고 docker 데몬과 관계가 없습니다). 단계별 실행 위치는 다음과 같습니다.
 
 | 단계 | 실행 위치 | 이미지·파일을 얻는 방법 | docker 데몬 |
 |---|---|---|---|
-| 10-k8s, 20-minio, 21-seaweedfs, 30-harbor, 35-metrics-server, 40-haproxy, 50-nfs-csi, 60-cilium, 80-postgresql | podman 빌드 컨테이너 | skopeo(이미지), apt(deb), curl(바이너리·차트·인스톨러) | 필요 없음 |
+| 10-k8s, 20-minio, 21-seaweedfs, 30-harbor, 35-metrics-server, 38-istio, 40-haproxy, 50-nfs-csi, 60-cilium, 80-postgresql | podman 빌드 컨테이너 | skopeo(이미지), apt(deb), curl(바이너리·차트·인스톨러), helm(차트 pull, 38-istio) | 필요 없음 |
 | 45-redis | 컨테이너에서 빌드할 단계가 45-redis 하나뿐이면 호스트에서 바로 실행(podman 안 씀). 아니면 빌드 컨테이너 | skopeo | 필요 없음 |
 | 70-mssql | 호스트 Docker 를 쓸 수 있으면 호스트(컨테이너 단계 뒤). 아니면 빌드 컨테이너 | skopeo(게시된 `mssql-fts` 이미지, 다이제스트 고정). 이미지는 빌드하지 않음 | 받은 이미지의 FTS 포함 확인에만 씀 |
 | 85-ollama-embedding | 호스트 Docker(컨테이너 단계와 70-mssql 뒤) | `docker build`(모델을 이미지에 넣음), skopeo(nginx) | 필요 |
@@ -189,7 +197,11 @@ sha256sum -c nfs-csi-v4.13.4.tar.gz.sha256
 sha256sum -c harbor-v2.15.2.tar.gz.sha256
 sha256sum -c minio-RELEASE.*.tar.gz.sha256
 sha256sum -c seaweedfs-4.48.tar.gz.sha256      # SeaweedFS 를 쓰는 경우
+sha256sum -c istio-1.30.3.tar.gz.sha256        # 38-istio 운영 번들 (이미지 없음, 약 190KB)
+# sha256sum -c istio-local-images-1.30.3.tar.gz.sha256   # 단일 노드 검증(--source local)에만 씁니다
 ```
+
+`istio-local-images-1.30.3` 은 `ISTIO_LOCAL_IMAGES=1` 로 빌드할 때만 생기는 검증용 이미지 묶음(약 200MB)입니다. 운영과 다중 노드에서는 옮기지 않습니다. Istio 이미지는 5.2절 hydrate 로 Harbor 에 올라갑니다.
 
 ---
 
@@ -504,7 +516,7 @@ sudo ./install.sh --check-only     # Deployment·APIService·kubectl top·imageI
 
 | 구성 요소 | 디렉터리 | 주요 역할 및 구성 요령 |
 |---|---|---|
-| **L4 Load Balancer** | [`40-haproxy`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/40-haproxy/README.md) | 호스트의 `80`, `443`, `15021` 포트를 인그레스 게이트웨이 NodePort로 패스스루 (`--network host`, `--restart unless-stopped`). Worker 노드에는 설치하지 않음. |
+| **L4 Load Balancer** | [`40-haproxy`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/40-haproxy/README.md) | 호스트의 `80`, `443`, `15021` 포트를 인그레스 게이트웨이 NodePort로 패스스루 (`--network host`, `--restart unless-stopped`). Worker 노드에는 설치하지 않음. NodePort 는 `38-istio` 가 `versions.env` 의 `ISTIO_NODEPORT_*`(31223/31164/31956)로 고정하므로 Istio 보다 먼저 설치해도 백엔드 포트가 맞음. Istio 설치 뒤 한 번 더 실행해 NodePort 를 반영하고 확인(5.3.5절). |
 | **SQL Server** | [`70-mssql`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/70-mssql/README.md) | **Full-Text Search(FTS)**가 내장된 커스텀 이미지(`mssql-fts:2022`) 필수 실행. 공식 MS 이미지에는 FTS가 없어 AS 설치 실패. 호스트 포트 `MSSQL_PORT`(기본 1433), 컨테이너 1433. |
 | **PostgreSQL** | [`80-postgresql`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/80-postgresql/README.md) | PostgreSQL 16 컨테이너, TLS 적용, 호스트 포트 `POSTGRES_PORT`(기본 5432), 컨테이너 5432 (Data Service 등 요구 시). `template1`에 `btree_gin`을 설치해 이후 만드는 DB가 확장을 물려받음. |
 | **Redis Cache** | [`45-redis`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/45-redis/README.md) | Redis OSS 단일 노드 (TLS 리스너, 포트 6379, 데이터 디렉터리 `/data/redis`). |
@@ -525,6 +537,16 @@ sudo ./install.sh                                                 # 키 자동 �
 ## 5. Phase 3: UiPath Automation Suite 오프라인 설치 (Automation Suite Installation)
 
 모든 하부 인프라(K8s, CNI, NFS-CSI, MinIO, Harbor, DB, LB)가 정상 동작하는 상태에서 UiPath Automation Suite 설치를 진행합니다.
+
+Istio 서비스 메시는 AS 설치기에 맡기지 않고 `38-istio` 로 직접 설치합니다. 순서는 다음과 같습니다.
+
+1. `input.json` 작성: `exclude_components` 와 `ingress` 블록 포함 (5.1절)
+2. AS 오프라인 번들로 Harbor 채우기: `hydrate-registry.sh` (5.2절). Istio 이미지·차트도 이때 올라갑니다
+3. `38-istio` 번들 빌드·반입, hydrate 결과 확인 (5.3.1~5.3.2절)
+4. Istio 설치 `sudo ./install.sh` (5.3.3절)
+5. istio-configure `sudo ./istio-configure.sh` (5.3.4절)
+6. `40-haproxy` 재실행 → `38-istio` `install.sh --check-only` (5.3.5절)
+7. `uipathctl prereq run` 이후 (5.4절~)
 
 ### 5.1 설치 바이너리 및 입력 매니페스트 준비
 
@@ -557,6 +579,13 @@ sudo ./install.sh                                                 # 키 자동 �
      "fqdn": "as2510.myrobots.co.kr",
      "profile": "default",
      "namespace": "uipath",
+     "exclude_components": ["istio", "istio-configure"],
+     "ingress": {
+       "namespace": "istio-system",
+       "gateway_selector": { "istio": "ingressgateway" },
+       "ingress_gateway_secret": "istio-ingressgateway-certs",
+       "istio_gateway_service_name": "istio-ingressgateway"
+     },
      "fabric": {
        "redis": {
          "hostname": "10.32.99.3",
@@ -609,27 +638,300 @@ sudo ./install.sh                                                 # 키 자동 �
    ```
 
    > [!NOTE]
+   > **`exclude_components` 와 `ingress`**: Istio 는 `38-istio` 가 설치하므로(5.3절) AS 설치기가 다시 설치하지 않게 `istio`, `istio-configure` 를 뺍니다. `ingress` 값은 UiPath 문서([서비스 메시 설치·구성](https://docs.uipath.com/automation-suite/automation-suite/2.2510/installation-guide-eks-aks/installing-and-configuring-the-service-mesh))의 기본값이고, `38-istio` 가 만드는 이름(`versions.env` 의 `ISTIO_NAMESPACE`, `ISTIO_GATEWAY_NAME`, `ISTIO_TLS_SECRET`)과 같습니다. 확인 명령은 5.3.6절입니다.
+   > - `38-istio/istio-configure.sh` 를 쓰지 않고 istio-configure 를 AS 설치기(admin 권한 kubeconfig)에 맡기려면 `exclude_components` 에서 `istio-configure` 를 뺍니다.
+   > - 참고 저장소([automation-suite-on-samsung-cloud-ske](https://github.com/javaos74/automation-suite-on-samsung-cloud-ske) `ko/input-ske.json`)는 `input.json` 에 `"cluster_type": "exclusive"`, `"kubernetes_distribution": "vanilla"` 를 넣습니다. UiPath 문서 예시는 aks/eks 만 적고 있어 이 키는 위 예시에 넣지 않았습니다(미검증). `38-istio` 의 istio-configure values 는 같은 값(`exclusive` / `vanilla`)을 씁니다.
+
+   > [!NOTE]
    > 위 예시의 포트는 기본값입니다. `external_object_storage.port` 와 `sql.port` 는 `site.env` 의 `MINIO_PORT`(SeaweedFS 면 `SEAWEEDFS_S3_PORT`)와 `MSSQL_PORT` 에 맞춥니다. PostgreSQL 을 쓰면 `postgresql.port` 를 `POSTGRES_PORT` 에 맞춥니다. 기본값이 아니면 연결 문자열 템플릿도 고쳐야 합니다(2.1절 "서비스 포트를 바꿀 때").
 
 ---
 
-### 5.2 오프라인 이미지를 Harbor 레지스트리에 적재 (Image Seeding)
+### 5.2 AS 오프라인 번들로 Harbor 채우기 (hydrate-registry.sh)
 
-UiPath 다운로드 포털에서 확보한 Automation Suite 오프라인 이미지 번들(tar 파일들)을 사내 Harbor 레지스트리에 일괄 업로드합니다.
+UiPath 오프라인 번들(`as-cmk-<버전>.tar.gz`)과 `hydrate-registry.sh` 로 AS 이미지와 Helm 차트를 Harbor 에 올립니다. UiPath 문서의 "Option B: Hydrating the registry with the offline bundle" 방식입니다. `38-istio` 가 쓰는 Istio 이미지·차트, istio-configure 차트, WASM·curl 이미지도 이 단계에서 함께 올라갑니다(5.2.6절 표).
+
+- 기준 문서
+  - https://docs.uipath.com/automation-suite/automation-suite/2.2510/installation-guide-eks-aks/configuring-the-oci-compliant-registry (Option B)
+  - https://docs.uipath.com/automation-suite/automation-suite/2.2510/installation-guide-eks-aks/downloading-the-installation-packages
+- 아래 값은 2026-11-07 에 2.2510.4 파일과 `hydrate-registry.sh` 본문으로 확인했습니다.
+
+> [!WARNING]
+> **이 절은 실제 실행으로 검증하지 않았습니다(미검증).** 이 저장소의 검증 환경에는 Harbor 가 없습니다. 명령과 주의점은 UiPath 문서와 `hydrate-registry.sh` 본문을 읽어 정리한 것입니다.
+
+#### 5.2.1 인터넷 호스트에서 받기
 
 ```bash
-# Harbor로 이미지 및 헬름 차트 일괄 푸시
-uipathctl registry seed \
-  --tar-file /path/to/uipath-images.tar \
-  --dest-registry harbor.myrobots.co.kr/uipath \
-  --dest-username admin \
-  --dest-password "<HARBOR_ADMIN_PASSWORD>" \
-  --num-worker 4
+# versions.env 의 UIPATH_AS_DOWNLOAD_URL 과 같습니다(UIPATH_AS_VERSION=2.2510.4)
+AS_URL=https://download.uipath.com/automation-suite/2.2510.4
+
+wget "${AS_URL}/as-cmk-2.2510.4.tar.gz"            # 56,981,275,919 B (약 57GB)
+wget "${AS_URL}/as-cmk-2.2510.4-sha256sum.txt"     # 해시 한 줄만 들어 있습니다
+wget "${AS_URL}/hydrate-registry.sh"
+
+# sha256 확인 (기대값 02f93b8707db8b906fdb5d012393446bfd35a758ca5aa348b635ce1ac7a89bfd)
+echo "$(cat as-cmk-2.2510.4-sha256sum.txt)  as-cmk-2.2510.4.tar.gz" | sha256sum -c
+```
+
+UiPath 문서의 이미지·차트 목록 `as-images.txt`, `as-helm-charts.txt` 는 실제 URL 이 `${AS_URL}/air-images.txt`, `${AS_URL}/embedded-helm-charts.txt` 입니다. 받은 세 파일을 점프 박스로 옮깁니다.
+
+#### 5.2.2 점프 박스 요건
+
+점프 박스는 Harbor(443)에 닿는 Linux VM 입니다. 인터넷은 필요 없습니다. 10-k8s 로 설치한 control plane 을 써도 되지만, 5.2.5절 주의점 4(podman 이미지 전부 삭제)를 먼저 확인합니다.
+
+| 항목 | 요건 | 비고 |
+|---|---|---|
+| `--extract-path` 디스크 | 최소 100GB, 권장 256GB | 디렉터리가 미리 있어야 합니다 |
+| Podman 저장소(graphRoot) | 150GB 이상 여유 | 기본 `/var/lib/containers`. 바꾸려면 `/etc/containers/storage.conf` 의 `graphRoot`, 확인은 `podman info` |
+| 임시 경로 | `TMPDIR` 를 큰 디스크로 지정 | UiPath 문서는 `TMP_DIR` 로 적었지만 Podman 이 읽는 변수는 `TMPDIR` 입니다([podman(1)](https://docs.podman.io/en/stable/markdown/podman.1.html)). 둘 다 지정합니다 |
+| 번들 원본 | `as-cmk-2.2510.4.tar.gz` 약 57GB | 추출 공간과 별도 |
+| Podman | 10-k8s 번들 `bin/` 의 podman-static v5.8.7 | 레지스트리 로그인이 되어 있어야 합니다 |
+| Helm | 3.8 이상. 10-k8s 번들 `bin/` 의 helm v3.22.0 | 레지스트리 로그인이 되어 있어야 합니다 |
+
+10-k8s 로 설치한 노드에는 podman 과 helm 이 이미 있습니다(`podman --version`, `helm version --short`). 다른 VM 이면 10-k8s 번들 `bin/` 에서 풉니다. 10-k8s `install.sh` 5단계와 같은 방식입니다. `--no-same-owner` 로 풀고 `cp -a` 는 쓰지 않습니다(`/usr`·`/etc` 소유자가 빌드 계정으로 바뀝니다, [`10-k8s/install.sh`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/10-k8s/install.sh) 주석).
+
+```bash
+cd <10-k8s 번들>/bin       # 예: ~/k8s-1.36.4-noble/bin
+
+# helm
+t=$(mktemp -d)
+sudo tar -C "$t" -xzf helm-v3.22.0-linux-amd64.tar.gz --no-same-owner
+sudo install -m 0755 "$t/linux-amd64/helm" /usr/local/bin/helm
+sudo rm -rf "$t"
+
+# podman-static
+t=$(mktemp -d)
+sudo tar -C "$t" -xzf podman-linux-amd64.tar.gz --strip-components=1 --no-same-owner
+sudo chown -R root:root "$t"
+sudo cp -r "$t/usr/." /usr/
+sudo cp -r -n "$t/etc/." /etc/
+sudo rm -rf "$t"
+# RHEL 계열(SELinux)이면: sudo restorecon -R /usr/local /etc/containers
+
+podman --version && helm version --short
+```
+
+#### 5.2.3 CA 신뢰와 Harbor 프로젝트
+
+```bash
+# 1) 점프 박스가 사내 CA 를 신뢰하게 합니다(OS 신뢰 저장소, docker/containerd). 4.1절과 같습니다.
+#    hydrate 의 helm push 는 OS 신뢰 저장소로 Harbor 인증서를 검증합니다.
+cd offline-install/05-certs && sudo ./deploy-certs.sh --local
+
+# 2) Harbor 에 uipath 프로젝트를 먼저 만듭니다(웹 UI 또는 API). 이미 있으면 409 가 납니다.
+H=<HARBOR_HOSTNAME>
+curl -fsS --cacert /opt/pki/ca/ca.crt -u 'admin:<HARBOR_ADMIN_PASSWORD>' \
+  -H 'Content-Type: application/json' -X POST "https://${H}/api/v2.0/projects" \
+  -d '{"project_name":"uipath","metadata":{"public":"false"}}'
+```
+
+- 프로젝트 이름은 `input.json` 의 `registries.docker.url` / `registries.helm.url`(`<HARBOR_HOSTNAME>/uipath`)과 `versions.env` 의 `ISTIO_HARBOR_PROJECT`(기본 `uipath`)에 맞춥니다.
+- private 이면 클러스터가 받을 때 pull secret 이 필요합니다(`38-istio` 는 `HARBOR_PULL_USER`/`HARBOR_PULL_PASSWORD` 로 만듭니다, 5.3.3절). public 이면 필요 없습니다.
+- push 에는 `uipath` 프로젝트에 push 권한이 있는 robot 계정을 권장합니다([`30-harbor`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/30-harbor/README.md)).
+
+#### 5.2.4 로그인과 hydrate 실행
+
+`hydrate-registry.sh` 는 스스로 로그인하지 않습니다. 실행할 계정(root)으로 podman 과 helm 에 먼저 로그인합니다. 대상 URL 은 포트 없이 `<HARBOR_HOSTNAME>/uipath` 로 씁니다(HTTPS 443, 4.4절). UiPath 예시는 `:443` 을 붙입니다.
+
+```bash
+sudo -i
+
+export TMPDIR=/data/hydrate/tmp TMP_DIR=/data/hydrate/tmp
+mkdir -p /data/hydrate/extract "$TMPDIR"
+cd /data/hydrate                                     # as-cmk-2.2510.4.tar.gz, hydrate-registry.sh 위치
+
+podman login <HARBOR_HOSTNAME> --username '<robot 계정>'           # 비밀번호는 프롬프트로
+helm registry login <HARBOR_HOSTNAME> --username '<robot 계정>'
+podman login <HARBOR_HOSTNAME> --get-login                         # hydrate 가 하는 확인과 같습니다
+
+chmod +x hydrate-registry.sh
+./hydrate-registry.sh \
+  --target-registry-url <HARBOR_HOSTNAME>/uipath \
+  --offline-bundle-path /data/hydrate/as-cmk-2.2510.4.tar.gz \
+  --extract-path /data/hydrate/extract
+```
+
+Document Understanding 오프라인 번들은 `--optional-bundle-path` 로 따로 올립니다. 이때도 `--extract-path` 를 줍니다.
+
+```bash
+./hydrate-registry.sh --target-registry-url <HARBOR_HOSTNAME>/uipath \
+  --optional-bundle-path /data/hydrate/<DU 번들>.tar.gz --extract-path /data/hydrate/extract
+```
+
+#### 5.2.5 주의점 (`hydrate-registry.sh` 2.2510.4 본문)
+
+1. 대상 URL 에 `/test` 를 붙여 시험 차트 `oci-compliance-checker:0.0.1-<epoch>` 를 push 합니다. 실행할 때마다 `uipath/test/oci-compliance-checker` 에 하나씩 남습니다.
+2. `podman login <대상> --get-login` 으로 로그인 여부만 확인합니다. 스스로 인증하지 않습니다.
+3. Podman graphRoot 마운트가 150G 보다 작으면 `y/n` 를 묻습니다. 터미널이 없으면 멈춥니다.
+4. 이미지를 적재하기 전에 `podman rmi -f -a` 로 **실행 계정의 podman 이미지를 모두 지웁니다.** 다른 용도의 podman 이미지가 있는 계정·호스트에서 실행하지 않습니다.
+5. 이미지는 `podman push --tls-verify=false` 로 올립니다(TLS 미검증). 차트는 `helm push` 로 올립니다(OS 신뢰 저장소로 검증). 그래서 Harbor 의 이미지 다이제스트는 원본과 다를 수 있습니다.
+6. `--extract-path` 는 이미 있어야 합니다.
+
+#### 5.2.6 결과 경로
+
+| 대상 | Harbor 위치 | 규칙(`hydrate-registry.sh`) |
+|---|---|---|
+| AS 이미지 | `<HARBOR_HOSTNAME>/uipath/<원본 경로>:<태그>` | `push_and_add_image`: `${TARGET_REGISTRY_URL}/${image_name}` |
+| AS 차트 | `oci://<HARBOR_HOSTNAME>/uipath/<첫 경로>/<차트>:<버전>` (`helm/…`, `vendor/…`) | `import_sf_charts`: `oci://${TARGET}/<차트 이름의 첫 경로>` |
+| 시험 차트 | `oci://<HARBOR_HOSTNAME>/uipath/test/oci-compliance-checker` | 주의점 1 |
+| Istio pilot / proxyv2 | `<HARBOR_HOSTNAME>/uipath/istio/{pilot,proxyv2}:1.30.3-20260730_echo` | 이미지 규칙 |
+| istio-wasm-plugin | `<HARBOR_HOSTNAME>/uipath/istio-wasm-plugin:2.2510.4` | 이미지 규칙 |
+| curl (istio-configure hook) | `<HARBOR_HOSTNAME>/uipath/curlimages/curl:2026.05.11` | 이미지 규칙 |
+| Istio 차트 base / istiod / gateway | `oci://<HARBOR_HOSTNAME>/uipath/vendor/{base,istiod,gateway}` `--version v1.30.3` | 차트 규칙 |
+| istio-configure 차트 | `oci://<HARBOR_HOSTNAME>/uipath/helm/istio-configure` `--version 2.2510.4` | 차트 규칙 |
+
+확인 명령:
+
+```bash
+H=<HARBOR_HOSTNAME>; CA=/opt/pki/ca/ca.crt; AUTH='<계정>:<비밀번호>'
+
+# 프로젝트 요약(저장소 수)
+curl -fsS --cacert "$CA" -u "$AUTH" "https://${H}/api/v2.0/projects/uipath/summary"
+
+# 특정 이미지 (저장소 이름의 '/' 는 %252F 로 두 번 인코딩합니다)
+curl -s --cacert "$CA" -u "$AUTH" -o /dev/null -w '%{http_code}\n' \
+  "https://${H}/api/v2.0/projects/uipath/repositories/istio%252Fpilot/artifacts/1.30.3-20260730_echo"   # 200
+
+# 차트를 받아 보고 sha256 을 versions.env 핀과 비교 (ISTIO_ISTIOD_CHART_SHA256 = b4df1f0f…)
+helm pull oci://${H}/uipath/vendor/istiod --version v1.30.3 && sha256sum istiod-v1.30.3.tgz
+```
+
+#### 5.2.7 모든 노드가 Harbor 를 신뢰하게 하기
+
+AS 파드와 Istio 사이드카는 어느 노드에도 뜹니다. worker 를 포함한 **모든 노드**가 `HARBOR_HOSTNAME` 을 해석하고(`/etc/hosts` 또는 사내 DNS) containerd 가 CA 를 신뢰해야 합니다.
+
+```bash
+cd offline-install/05-certs && ./deploy-certs.sh --nodes 'cp-node,worker-01,worker-02'
 ```
 
 ---
 
-### 5.3 사전 요구조건 점검 (Prerequisites Check)
+### 5.3 Istio 서비스 메시 구성 ([`38-istio`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/38-istio/README.md))
+
+AS 2.2510.4 번들에 들어 있는 Istio 1.30.3 을 AS 설치기 대신 `38-istio` 로 설치합니다. UiPath 문서([서비스 메시 설치·구성](https://docs.uipath.com/automation-suite/automation-suite/2.2510/installation-guide-eks-aks/installing-and-configuring-the-service-mesh))의 Step 1(Istio 설치)과 Step 2 Option A(istio-configure)에 해당하고, 참고 저장소([automation-suite-on-samsung-cloud-ske](https://github.com/javaos74/automation-suite-on-samsung-cloud-ske) `ko/05-istio-install.md`)처럼 helm 으로 base → istiod → ingressgateway 순서로 설치합니다.
+
+- ingressgateway 는 NodePort 로 고정하고, `40-haproxy` 가 호스트 80/443/15021 을 그 NodePort 로 넘깁니다.
+- 이미지와 차트는 5.2절 hydrate 가 Harbor 에 올린 것을 받습니다(`--source harbor`, 기본값).
+- 판정 항목·values 근거·트러블슈팅은 [`38-istio/README.md`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/38-istio/README.md), 검증 상태는 그 README 11절에 있습니다.
+
+> [!IMPORTANT]
+> **버전 근거:** UiPath 2.2510 [호환성 매트릭스](https://docs.uipath.com/automation-suite/automation-suite/2.2510/installation-guide-eks-aks/compatibility-matrix)와 AS 2.2510.4 번들의 Istio 가 1.30.3 이고, 이미지는 echohq.com 재빌드(`1.30.3-20260730_echo`)입니다. [Istio 보안 공지](https://istio.io/latest/news/security/) ISTIO-SECURITY-2026-006~009 의 수정은 upstream 1.30.8 에만 있습니다. **Echo 재빌드 이미지에 2026-006~009 수정이 들어 있는지는 확인하지 못했습니다(미확인).** 사용자가 이 위험을 알고 UiPath 배포 버전을 골랐습니다. 1.30 은 EOL 예정이 2026-12경입니다([supported-releases](https://istio.io/latest/docs/releases/supported-releases/)). 이미지·차트 다이제스트는 `versions.env` 에 고정합니다.
+
+#### 5.3.1 번들 빌드·반입
+
+```bash
+# 빌드 호스트(인터넷 O)
+cd offline-install
+./00-common/verify-urls.sh                            # Istio 절: AS 2.2510.4 목록 대조 + 다이제스트·차트 태그
+./00-common/build-in-container.sh 24.04 38-istio      # bundle/istio-1.30.3.tar.gz (+ .sha256)
+
+# control plane 으로 옮긴 뒤
+sha256sum -c istio-1.30.3.tar.gz.sha256
+tar xzf istio-1.30.3.tar.gz && cd istio-1.30.3
+```
+
+운영 번들에는 이미지가 없습니다(차트 4개, values, 스크립트). 단일 노드 검증용 이미지 묶음(`ISTIO_LOCAL_IMAGES=1`, `--source local`)은 운영에 쓰지 않습니다.
+
+**AS 버전을 바꿀 때:** `versions.env` 의 `UIPATH_AS_VERSION`(현재 `2.2510.4`)을 바꾸면 같은 절의 Istio·istio-configure 값도 함께 바꿉니다. AS 버전마다 번들에 든 Istio 가 다릅니다.
+
+| 변수(현재 값) | 새 값을 찾는 곳 (`<ver>` = 새 AS 버전) |
+|---|---|
+| `ISTIO_TAG`(현재 `1.30.3-20260730_echo`), `ISTIO_VERSION`(현재 `1.30.3`) | `https://download.uipath.com/automation-suite/<ver>/air-images.txt` 의 `istio/pilot:`, `istio/proxyv2:` |
+| `UIPATH_WASM_TAG`(현재 `2.2510.4`), `UIPATH_ISTIO_CURL_TAG`(현재 `2026.05.11`) | 같은 파일의 `istio-wasm-plugin:`, `curlimages/curl:` |
+| `ISTIO_CHART_VERSION`(현재 `v1.30.3`), `UIPATH_ISTIO_CONFIGURE_VERSION`(현재 `${UIPATH_AS_VERSION}`) | `https://download.uipath.com/automation-suite/<ver>/embedded-helm-charts.txt` 의 `vendor/{base,istiod,gateway}:`, `helm/istio-configure:` |
+| (교차 확인) | `https://download.uipath.com/automation-suite/<ver>/versions.json`, UiPath 호환성 매트릭스, Istio 지원 표 |
+| `ISTIO_{PILOT,PROXYV2}_DIGEST`, `UIPATH_WASM_DIGEST`, `UIPATH_ISTIO_CURL_DIGEST`, `ISTIO_{BASE,ISTIOD,GATEWAY}_CHART_SHA256`, `UIPATH_ISTIO_CONFIGURE_CHART_SHA256` | registry.uipath.com 에서 다시 잽니다(`skopeo inspect`, `helm pull` + `sha256sum`) |
+
+그 다음 UiPath 래퍼 `helm/istiod:<ver>` 의 `values-air.yaml` 을 `38-istio` 의 istiod values 와 대조하고, `00-common/verify-urls.sh` 를 통과시킵니다. 대조 장치는 `verify-urls.sh` 의 Istio 절에 있습니다. 빌드에 넣지 않은 이유는 download.uipath.com 에 닿지 않는 빌드 호스트(egress 를 registry.uipath.com 으로 줄인 경우)에서도 빌드가 막히지 않게 하려는 것입니다. `build-bundle.sh` 도 차트 sha256 핀과 렌더링한 이미지 집합으로 어긋남을 잡습니다. 자세한 절차는 `versions.env` 의 Istio 절 주석과 38-istio README 2.3절에 있습니다.
+
+#### 5.3.2 hydrate 결과 확인
+
+5.2절 hydrate 가 아래 8개를 Harbor 에 올렸는지 확인합니다. `38-istio` 에는 별도 Harbor 등록 단계가 없습니다. 8개 모두 hydrate 가 올리기 때문입니다.
+
+| 아티팩트 | Harbor 위치 (`ISTIO_HARBOR_PROJECT=uipath`) |
+|---|---|
+| pilot | `<HARBOR_HOSTNAME>/uipath/istio/pilot:1.30.3-20260730_echo` |
+| proxyv2 | `<HARBOR_HOSTNAME>/uipath/istio/proxyv2:1.30.3-20260730_echo` |
+| istio-wasm-plugin | `<HARBOR_HOSTNAME>/uipath/istio-wasm-plugin:2.2510.4` |
+| curl | `<HARBOR_HOSTNAME>/uipath/curlimages/curl:2026.05.11` |
+| base / istiod / gateway | `oci://<HARBOR_HOSTNAME>/uipath/vendor/{base,istiod,gateway}` `--version v1.30.3` |
+| istio-configure | `oci://<HARBOR_HOSTNAME>/uipath/helm/istio-configure` `--version 2.2510.4` |
+
+```bash
+H=<HARBOR_HOSTNAME>; CA=/opt/pki/ca/ca.crt; AUTH='<계정>:<비밀번호>'   # public 프로젝트면 -u 를 빼도 됩니다
+for a in istio%252Fpilot/artifacts/1.30.3-20260730_echo istio%252Fproxyv2/artifacts/1.30.3-20260730_echo \
+         istio-wasm-plugin/artifacts/2.2510.4 curlimages%252Fcurl/artifacts/2026.05.11 \
+         vendor%252Fbase/artifacts/v1.30.3 vendor%252Fistiod/artifacts/v1.30.3 vendor%252Fgateway/artifacts/v1.30.3 \
+         helm%252Fistio-configure/artifacts/2.2510.4; do
+  printf '%-52s %s\n' "$a" "$(curl -s --cacert "$CA" -u "$AUTH" -o /dev/null -w '%{http_code}' \
+    "https://${H}/api/v2.0/projects/uipath/repositories/${a}")"
+done                                                   # 모두 200 이어야 합니다
+
+# root·클러스터 없이 설치할 이미지·차트 경로와 명령을 미리 봅니다
+./install.sh --dry-run --source harbor
+./istio-configure.sh --dry-run --source harbor
+```
+
+`install.sh` 와 `istio-configure.sh` 는 설치 전에 같은 확인을 스스로 합니다. Harbor 이름 해석, CA, containerd `hosts.toml`, `/api/v2.0/ping`, 프로젝트 public 여부, 이미지 존재(Harbor API), `crictl pull`, 차트 `helm pull` + sha256 대조 순서이고, 하나라도 실패하면 아무것도 바꾸지 않고 멈춥니다. Harbor 사본의 이미지 다이제스트는 원본과 다를 수 있어(5.2.5절 주의점 5) 이미지는 태그로 참조하고, 차트만 sha256 을 핀과 대조합니다.
+
+> [!WARNING]
+> **실제 Harbor 경로는 미검증입니다.** `--source harbor` 의 Harbor 접근(`helm pull --ca-file`, `helm registry login`, `crictl pull`, Harbor API, pull secret)은 `bash -n`, `shellcheck`, `--dry-run` 으로만 확인했습니다.
+
+#### 5.3.3 Istio 설치
+
+```bash
+sudo ./install.sh                  # = --source harbor. istio-base → istiod → istio-ingressgateway + 판정
+
+# TLS 원본이 /opt/pki/as 가 아니면(기본은 4.1절 deploy-certs.sh --local 이 둔 곳)
+# sudo ISTIO_TLS_CERT_DIR=/path/to/as ./install.sh
+# uipath 프로젝트가 private 이면 pull 계정(robot 권장). istio-system 에 uipathpullsecret 을 만듭니다.
+# sudo HARBOR_PULL_USER='<robot 계정>' HARBOR_PULL_PASSWORD='<토큰>' ./install.sh
+```
+
+- **TLS secret:** `istio-system/istio-ingressgateway-certs` 를 `/opt/pki/as/{fullchain.crt,tls.key,ca.crt}` 로 만듭니다(`tls.crt` = 서버 인증서 + 체인). 설치 전에 SAN(`AS_FQDN`, `*.AS_FQDN`), 키 짝, CA 검증을 확인하고 틀리면 멈춥니다.
+- **NodePort:** `http2=31223`, `https=31164`, `status-port=31956`(`versions.env` 의 `ISTIO_NODEPORT_*`, `site.env` 로 변경 가능)으로 고정합니다. 같은 NodePort 를 쓰는 다른 Service 가 있으면 멈춥니다.
+- 출력 끝이 `검증 결과: 통과 N / 실패 0` 이어야 합니다. 다시 실행해도 결과가 같습니다(`helm upgrade --install`).
+
+#### 5.3.4 istio-configure (WASM 라우팅 플러그인)
+
+```bash
+sudo ./istio-configure.sh          # 릴리스 custom-istio-configure (istio-system), --wait --timeout 10m
+sudo ./install.sh --check-only     # gateway 와 smoke 판정이 그대로인지 다시 봅니다
+```
+
+- values 는 UiPath 문서 Option A 값에 `global.kubernetesDistribution: vanilla`, `global.cluster_type: exclusive` 를 넣은 것입니다(38-istio README 7절).
+- **`AS_FQDN` 을 바꾸면 다시 실행합니다**(WasmPlugin `pluginConfig.fqdn`). 인증서도 바꿨으면 `install.sh` 를 먼저 다시 실행합니다(TLS secret).
+- 이 스크립트를 썼으면 `input.json` 의 `exclude_components` 에 `istio-configure` 를 둡니다(5.1절).
+
+#### 5.3.5 HAProxy 연결 확인
+
+```bash
+# 1) 40-haproxy 재실행: ingressgateway NodePort 를 자동 탐지해 설정에 반영합니다
+cd ~/haproxy-3.4.4 && sudo ./install.sh
+
+# 2) 38-istio 판정: 컨테이너 l4 가 있으면 HAProxy 경유 80/443/15021 까지 봅니다
+cd ~/istio-1.30.3 && sudo ./install.sh --check-only
+
+# 3) 직접 확인
+curl -s 'http://127.0.0.1:8404/;csv' | awk -F, 'NR>1 && $2!="" && $1!="stats" {print $1, $2, $18}'   # 백엔드 UP
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:15021/healthz/ready                       # 200
+```
+
+`--check-only` 의 smoke 판정은 백엔드 없이 200 `istio-smoke-ok` 를 돌려주는 Gateway/VirtualService 를 잠시 만들어 `127.0.0.1:80` 과 `:443`(사내 CA 검증)을 확인하고 지웁니다. AS 를 설치하기 전에는 `https://<AS_FQDN>` 에 응답할 Gateway 가 없으므로 그 주소로는 확인할 수 없습니다.
+
+#### 5.3.6 input.json ingress 값 확인
+
+5.1절 `ingress` 블록의 값이 실제 리소스와 같은지 확인합니다. 첫 명령은 UiPath 문서의 확인 명령입니다.
+
+```bash
+kubectl -n istio-system get deploy istio-ingressgateway -o jsonpath="{.metadata.labels.istio}"; echo   # ingressgateway → gateway_selector.istio
+kubectl -n istio-system get svc istio-ingressgateway -o jsonpath='{.metadata.name} {.spec.type}{"\n"}'  # istio-ingressgateway NodePort → istio_gateway_service_name
+kubectl -n istio-system describe secret istio-ingressgateway-certs | sed -n '/^Data/,$p'               # ca.crt / tls.crt / tls.key → ingress_gateway_secret
+```
+
+---
+
+### 5.4 사전 요구조건 점검 (Prerequisites Check)
 
 설치 실행 전, 클러스터 리소스, DNS, 스토리지 클래스, 외부 DB 및 Object Storage의 연결성을 자동 검증합니다.
 
@@ -646,7 +948,7 @@ uipathctl prereq run input.json --versions versions.json
 
 ---
 
-### 5.4 외부 사전 리소스 자동 생성
+### 5.5 외부 사전 리소스 자동 생성
 
 데이터베이스(DB)와 오브젝트 스토리지 버킷을 사전에 자동으로 생성합니다.
 
@@ -659,7 +961,7 @@ uipathctl prereq create input.json --versions versions.json
 
 ---
 
-### 5.5 Automation Suite 배포 실행
+### 5.6 Automation Suite 배포 실행
 
 모든 사전 점검을 통과하면 실제 클러스터 배포를 시작합니다.
 
@@ -679,7 +981,7 @@ kubectl -n uipath get pods -w
 
 ---
 
-### 5.6 설치 완료 검증 및 헬스체크
+### 5.7 설치 완료 검증 및 헬스체크
 
 배포가 완료되면 플랫폼의 전반적인 상태를 검증합니다.
 
@@ -727,6 +1029,9 @@ sudo ./90-verify/airgap-off.sh
 | **Harbor 재부팅 후 443 접속 불가 (`Connection refused`)** | Docker 데몬이 컨테이너 순서(`harbor-log`의 1514 포트 리스너 준비)를 기다리지 않고 동시 기동함 | `sudo systemctl restart harbor.service` 실행 ([`30-harbor/conf/harbor-start.sh`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/30-harbor/conf/harbor-start.sh) 순차 기동 보장) |
 | **PostgreSQL의 `AutomationSuite_*` DB에 `btree_gin` 없음** | `template1`에 확장을 넣기 전에 만들어졌거나 `template0`로 만들어짐. `template1` 변경은 이후 만드는 DB에만 복사됨 | 이름이 `AutomationSuite_`로 시작하는 DB마다 `CREATE EXTENSION IF NOT EXISTS btree_gin` 실행. 절차: [`80-postgresql/README.md` §9](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/80-postgresql/README.md) |
 | **MSSQL 사전 점검 실패 (`Full-Text Search not installed`)** | MS 공식 mssql 이미지를 사용하여 FTS 서비스가 누락됨 | [`70-mssql/fts-image`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/70-mssql/fts-image)에서 빌드된 `mssql-fts:2022` 이미지로 교체 |
+| **Istio 설치 뒤 HAProxy 백엔드 DOWN, 클라이언트 503** (`be_https/<NOSRV>`) | 40-haproxy 를 Istio 설치 전에 띄웠고 ingressgateway NodePort 가 그때 값과 다름(`site.env` 의 `ISTIO_NODEPORT_*` 를 한쪽 번들에만 반영). 또는 gateway 파드가 Ready 가 아님 | `40-haproxy` `install.sh` 재실행(NodePort 자동 탐지). `kubectl -n istio-system get svc istio-ingressgateway` 의 NodePort 와 `curl -s 'http://127.0.0.1:8404/;csv'` 비교, `38-istio` `install.sh --check-only` (5.3.5절) |
+| **`https://<AS_FQDN>` 인증서 오류 또는 TLS handshake 실패** | `istio-system` 에 `istio-ingressgateway-certs` 가 없거나, 인증서 SAN 에 `AS_FQDN`·`*.AS_FQDN` 이 없음(`AS_FQDN` 변경 후 재발급 안 함) | `05-certs` 재발급 → `deploy-certs.sh --local` → `38-istio` `install.sh` 재실행(secret 갱신). `--check-only` 의 TLS 4항목 확인. FQDN 을 바꿨으면 `istio-configure.sh` 도 재실행 |
+| **istio-configure 판정 "Wasm 필터 적재" 실패, AS 라우팅 안 됨** | `uipath-istio-plugin-http` 가 Ready 가 아니거나 hook Job `update-wasm-plugin-version` 이 WasmPlugin url 을 바꾸지 못함 | `kubectl -n istio-system get pods,jobs`, `kubectl -n istio-system logs job/update-wasm-plugin-version`, gateway 로그의 `wasm` 줄 확인 후 `38-istio` `istio-configure.sh` 재실행 ([`38-istio/README.md`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/38-istio/README.md) 12절) |
 | **`kubectl top nodes` 메트릭 수집 불가** | Metrics Server의 kubelet serving 인증서 검증 실패 | [`metrics-server/components.yaml`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/metrics-server/components.yaml)에 `--kubelet-insecure-tls` 및 `--kubelet-preferred-address-types=InternalIP` 플래그 추가 |
 | **AS 설치 후 또는 maintenance 해제 뒤 특정 노드의 pod 다수가 `CrashLoopBackOff`** (죽는 컨테이너는 `istio-proxy`, 로그에 `inotify_fd_ >= 0` / `couldn't initialize inotify: too many open files`) | 노드의 `fs.inotify.max_user_instances`가 기본값 128이라 istio-proxy(uid 1337)가 한도를 다 씀. Redis 인증서 오류처럼 보일 수 있지만 무관함 | 지금 `10-k8s/install.sh`는 설치 때 control plane·worker 모두에 `fs.inotify.max_user_instances=8192`, `fs.inotify.max_user_watches=1048576`을 넣는다(`/etc/sysctl.d/99-inotify.conf`). 그 전 번들로 설치한 노드는 모든 노드에 같은 파일을 직접 넣어 적용한 뒤 크래시 pod 삭제. 상세: [`10-k8s/README.md` §7.1](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/10-k8s/README.md), Redis 점검 절차: [`45-redis/README.md`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/45-redis/README.md) |
 

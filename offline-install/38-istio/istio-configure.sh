@@ -104,12 +104,23 @@ envoyfilters_present() {
 plugin_url_served() {
     kubectl -n "$NS" exec "deploy/${PLUGIN}" -- busybox wget -q -O /dev/null "$PLUGIN_URL" >/dev/null 2>&1
 }
-# gateway Envoy 에 Wasm 필터가 실제로 들어갔는가. 원격 모듈을 받지 못하면 istio-agent 가
-# 다른 필터로 바꾸므로 Wasm 타입과 플러그인 이름이 함께 있어야 한다.
+# gateway Envoy 에 Wasm 필터가 실제로 들어갔는가.
+#
+# WasmPlugin 은 ECDS(필터 설정 탐색)로 내려온다. 그래서 ECDS 덤프만 보고, 그 안에서
+# 플러그인 이름(<네임스페이스>.<WasmPlugin>)이 든 항목의 타입이 Wasm 인지 본다.
+#   - 전체 config_dump 를 grep 하면 안 된다. 부트스트랩의 지원 확장 목록에 Wasm 타입 URL 이
+#     늘 들어 있어 타입 조건은 항상 참이 된다(실측: charles-weed 2026-11-08).
+#   - 원격 모듈을 받지 못하면 istio-agent 가 같은 이름의 다른 필터(RBAC 등)로 바꾼다.
+#     그래서 이름과 Wasm 타입이 같은 항목에 있어야 한다.
 wasm_loaded_in_gateway() {
     local dump
-    dump="$(kubectl -n "$NS" exec "deploy/${GW}" -c istio-proxy -- pilot-agent request GET config_dump 2>/dev/null)" || return 1
-    grep -qF 'envoy.extensions.filters.http.wasm.v3.Wasm' <<<"$dump" && grep -qF "$WASMPLUGIN" <<<"$dump"
+    dump="$(kubectl -n "$NS" exec "deploy/${GW}" -c istio-proxy -- \
+        pilot-agent request GET 'config_dump?resource=ecds_filters' 2>/dev/null)" || return 1
+    awk -v name="${NS}.${WASMPLUGIN}" '
+        /"ecds_filter"/ { if (n && w) ok = 1; n = 0; w = 0 }
+        index($0, name) { n = 1 }
+        /"type\.googleapis\.com\/envoy\.extensions\.filters\.http\.wasm\.v3\.Wasm"/ { w = 1 }
+        END { if (n && w) ok = 1; exit !ok }' <<<"$dump"
 }
 plugin_imageid_from_harbor() {
     local ids
@@ -136,7 +147,16 @@ run_checks() {
     check "pluginConfig fqdn=${AS_FQDN:-?}" wasmplugin_field_is '{.spec.pluginConfig.fqdn}' "${AS_FQDN:-}"
     check "EnvoyFilter 4개(${ENVOYFILTERS[*]})" envoyfilters_present
     check "plugin URL 응답(${PLUGIN} 파드에서 ${PLUGIN_URL})" retry_until 60 plugin_url_served
-    check "${GW} Envoy 에 Wasm 필터 ${WASMPLUGIN} 적재(config_dump)" retry_until 120 wasm_loaded_in_gateway
+    # Wasm 필터는 HTTP 리스너에 붙는다. Gateway 리소스가 없으면(AS 설치 전) gateway 에는
+    # 정적 리스너 15090/15021 만 있어 필터가 어디에도 들어가지 않는다(실측: charles-weed
+    # 2026-11-08). 그래서 install.sh 와 같은 smoke Gateway 를 판정 동안만 만든다.
+    if smoke_apply; then
+        check "${GW} Envoy 에 Wasm 필터 ${WASMPLUGIN} 적재(config_dump ECDS, smoke Gateway)" \
+            retry_until 120 wasm_loaded_in_gateway
+        smoke_delete
+    else
+        check "smoke Gateway/VirtualService 적용" false
+    fi
     check "${GW} Available" retry_until 120 deploy_available "$GW"
     if [[ "$src" == "local" ]]; then
         check "wasm·curl 이미지 containerd(k8s.io)에 적재됨" images_in_containerd "$UIPATH_WASM_IMAGE" "$UIPATH_ISTIO_CURL_IMAGE"

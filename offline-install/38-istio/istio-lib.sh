@@ -109,6 +109,27 @@ release_deployed() {
     grep -qxF "$1" <<<"$l"
 }
 
+#--- 판정용 smoke Gateway/VirtualService -----------------------------------
+# 백엔드 없이 200 istio-smoke-ok 를 돌려주는 리소스를 판정 동안만 만든다.
+# install.sh 는 HTTP/HTTPS 응답을, istio-configure.sh 는 Wasm 필터 적재를 이것으로 본다.
+# 끝나면 지우고, 중간에 끝나도 EXIT trap(istio_cleanup)이 지운다.
+SMOKE_HOST="istio-smoke.${AS_FQDN:-}"
+SMOKE_APPLIED=""
+smoke_yaml() {
+    sed -e "s|__NS__|${NS}|g" -e "s|__HOST__|${SMOKE_HOST}|g" -e "s|__TLS_SECRET__|${ISTIO_TLS_SECRET}|g" \
+        "${CONF_DIR}/smoke.yaml.tmpl"
+}
+smoke_apply() {
+    smoke_yaml | kubectl apply -f - >/dev/null 2>&1 || return 1
+    SMOKE_APPLIED=1
+}
+smoke_delete() {
+    [[ -n "$SMOKE_APPLIED" ]] || return 0
+    smoke_yaml | kubectl delete --ignore-not-found -f - >/dev/null 2>&1 || true
+    SMOKE_APPLIED=""
+}
+CLEANUP_HOOKS+=(smoke_delete)
+
 #--- local: 검증용 이미지 묶음 --------------------------------------------
 # $1 = 묶음 안 conf/ 의 목록 파일 이름(images-istio.list | images-uipath.list)
 local_images_import() {

@@ -480,13 +480,15 @@ WasmPlugin uipath-routing-policy url = http://uipath-istio-plugin-http.istio-sys
 pluginConfig cluster_type=exclusive / k8s_distribution=vanilla / fqdn=AS_FQDN
 EnvoyFilter 4개
 plugin URL 응답 (plugin-http 파드에서 busybox wget)
-istio-ingressgateway Envoy 에 Wasm 필터 uipath-routing-policy 적재 (config_dump)
+istio-ingressgateway Envoy 에 Wasm 필터 uipath-routing-policy 적재 (config_dump ECDS, smoke Gateway)
 istio-ingressgateway Available
 출처: local  = wasm·curl 이미지가 containerd(k8s.io)에 적재됨
       harbor = plugin imageID 가 <HARBOR_HOSTNAME>/ + gateway env WASM_INSECURE_REGISTRIES
 ```
 
-- proxyv2(Echo mini) 이미지에는 `curl`/`wget`/`sh` 가 없어 gateway 컨테이너에서 plugin URL 을 받아 볼 수 없다. 그래서 plugin-http 파드에서 `busybox wget` 으로 받고, gateway 쪽은 `pilot-agent request GET config_dump` 에 `envoy.extensions.filters.http.wasm.v3.Wasm` 과 `uipath-routing-policy` 가 함께 있는지 본다. 원격 모듈을 받지 못하면 istio-agent 가 다른 필터로 바꾸므로 둘이 함께 있어야 한다.
+- proxyv2(Echo mini) 이미지에는 `curl`/`wget`/`sh` 가 없어 gateway 컨테이너에서 plugin URL 을 받아 볼 수 없다. 그래서 plugin-http 파드에서 `busybox wget` 으로 받는다.
+- gateway 쪽은 `pilot-agent request GET 'config_dump?resource=ecds_filters'` 에서 `istio-system.uipath-routing-policy` 항목의 타입이 `envoy.extensions.filters.http.wasm.v3.Wasm` 인지 본다. 원격 모듈을 받지 못하면 istio-agent 가 같은 이름의 다른 필터로 바꾸므로 이름과 타입이 같은 항목에 있어야 한다. 전체 `config_dump` 를 grep 하면 부트스트랩의 지원 확장 목록에 Wasm 타입이 늘 있어 판정이 의미가 없다(charles-weed 실측).
+- Wasm 필터는 HTTP 리스너에 붙는다. AS 를 설치하기 전에는 Gateway 리소스가 없어 gateway 에 정적 리스너(15090, 15021)만 있고 필터가 들어갈 곳이 없다. 그래서 이 판정 동안만 install.sh 와 같은 smoke Gateway/VirtualService 를 만들고 지운다.
 - istio-configure 를 설치한 뒤 `install.sh --check-only` 를 다시 실행해 gateway 와 smoke 가 그대로인지 본다.
 
 ---

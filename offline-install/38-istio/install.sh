@@ -31,7 +31,6 @@ source "${BUNDLE_ROOT}/istio-lib.sh"
 istio_parse_args "$@"
 
 TLS_DIR="${ISTIO_TLS_CERT_DIR:-/opt/pki/as}"
-SMOKE_HOST="istio-smoke.${AS_FQDN:-}"
 BASE_TGZ="$(bundle_chart "$ISTIO_BASE_CHART" "$ISTIO_CHART_VERSION")"
 ISTIOD_TGZ="$(bundle_chart "$ISTIO_ISTIOD_CHART" "$ISTIO_CHART_VERSION")"
 GATEWAY_TGZ="$(bundle_chart "$ISTIO_GATEWAY_CHART" "$ISTIO_CHART_VERSION")"
@@ -202,18 +201,6 @@ tls_ca_ok() { openssl verify -CAfile "$2" "$1" >/dev/null 2>&1; }   # $1=인증�
 
 body_is_smoke() { [[ "$(curl -sf --max-time 5 "$@" 2>/dev/null)" == "istio-smoke-ok" ]]; }
 
-SMOKE_APPLIED=""
-smoke_yaml() {
-    sed -e "s|__NS__|${NS}|g" -e "s|__HOST__|${SMOKE_HOST}|g" -e "s|__TLS_SECRET__|${ISTIO_TLS_SECRET}|g" \
-        "${CONF_DIR}/smoke.yaml.tmpl"
-}
-smoke_delete() {
-    [[ -n "$SMOKE_APPLIED" ]] || return 0
-    smoke_yaml | kubectl delete --ignore-not-found -f - >/dev/null 2>&1 || true
-    SMOKE_APPLIED=""
-}
-CLEANUP_HOOKS+=(smoke_delete)
-
 l4_running() {
     command -v docker >/dev/null 2>&1 \
         && [[ "$(docker inspect -f '{{.State.Running}}' l4 2>/dev/null)" == "true" ]]
@@ -261,8 +248,7 @@ run_checks() {
 
     # smoke: 백엔드 없이 200 을 돌려주는 Gateway/VirtualService 를 잠시 만든다.
     # Host 헤더에 포트를 붙이지 않는다(VirtualService hosts 와 맞춘다).
-    if smoke_yaml | kubectl apply -f - >/dev/null 2>&1; then
-        SMOKE_APPLIED=1
+    if smoke_apply; then
         check "smoke HTTP  NodePort ${ISTIO_NODEPORT_HTTP} -> istio-smoke-ok" retry_until 60 \
             body_is_smoke -H "Host: ${SMOKE_HOST}" "http://${node}:${ISTIO_NODEPORT_HTTP}/"
         check "smoke HTTPS NodePort ${ISTIO_NODEPORT_HTTPS} (사내 CA 검증) -> istio-smoke-ok" retry_until 60 \
@@ -296,6 +282,8 @@ do_uninstall() {
     if helm -n "$NS" status custom-istio-configure >/dev/null 2>&1; then
         die "custom-istio-configure 릴리스가 있다. 먼저 sudo ./istio-configure.sh --uninstall 을 실행할 것."
     fi
+    # 이전 판정이 남긴 smoke 가 있을 수 있으니 무조건 지운다. 값은 istio-lib.sh 의 smoke_delete 가 읽는다.
+    # shellcheck disable=SC2034
     SMOKE_APPLIED=1; smoke_delete
     helm -n "$NS" uninstall "$GW"   2>/dev/null || warn "${GW} 릴리스가 없다"
     helm -n "$NS" uninstall istiod  2>/dev/null || warn "istiod 릴리스가 없다"

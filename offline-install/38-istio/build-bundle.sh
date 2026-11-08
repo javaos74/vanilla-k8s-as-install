@@ -172,12 +172,24 @@ ok "conf/istiod-values.yaml"
 # 포트 이름(status-port / http2 / https)은 차트 기본값과 같다. 40-haproxy 의 NodePort
 # 자동 탐지가 이 이름으로 찾는다.
 # env(WASM_INSECURE_REGISTRIES) / imagePullSecrets 는 install.sh 가 --set 으로 준다.
+#
+# imagePullPolicy: IfNotPresent 를 명시한다(사용자 결정, charles-weed 실측 2026-11-08).
+#   차트는 컨테이너 이미지를 태그 없는 image: auto(주입 자리표시)로 두고 imagePullPolicy
+#   기본값이 "" 라 Deployment 에 쓰지 않는다. 그러면 Kubernetes 가 태그 없는 이미지의
+#   기본값 Always 를 채운다. 이 값이 주입 템플릿(global.imagePullPolicy=IfNotPresent)보다
+#   우선해서, 이미 노드에 있어도 파드가 뜰 때마다 레지스트리에서 다시 받았다.
+#   그대로 두면 Harbor 가 내려갔을 때, 또는 --source local 에어갭에서 gateway 가 뜨지 못한다.
+#   https://kubernetes.io/docs/concepts/containers/images/#imagepullpolicy-defaulting
+#   이 값은 gateway Deployment 에만 쓰인다. 사이드카(proxyv2 주입)는 istiod 의
+#   global.imagePullPolicy 를 따르고 이번에 바꾸지 않았다.
 cat > "${CONF_DIR}/gateway-values.yaml.tmpl" <<EOF
 #---------------------------------------------------------------------
 # ${ISTIO_GATEWAY_NAME} (${ISTIO_GATEWAY_CHART} ${ISTIO_CHART_VERSION})
 # 릴리스 이름 ${ISTIO_GATEWAY_NAME} -> Service/Deployment 이름이 같고,
 # 라벨/selector 는 istio=ingressgateway 가 된다(차트 _helpers.tpl).
+# imagePullPolicy: image: auto 때문에 Kubernetes 가 Always 를 채우는 것을 막는다(build-bundle.sh 주석).
 #---------------------------------------------------------------------
+imagePullPolicy: IfNotPresent
 service:
   type: NodePort
   ports:
@@ -334,7 +346,9 @@ SVC_SEL="$(awk '/^  selector:/{s=1; next} s && /^  [^ ]/{s=0} s' <<<"$SVC_DOC")"
 grep -qx '    istio: ingressgateway' <<<"$SVC_SEL" || die "gateway Service selector 에 istio: ingressgateway 가 없다"
 [[ "$(images_of_kind "$RENDERED" Deployment)" == "auto" ]] \
     || die "gateway Deployment 이미지가 auto(주입)가 아니다"
-ok "gateway Service NodePort ${ISTIO_NODEPORT_HTTP}/${ISTIO_NODEPORT_HTTPS}/${ISTIO_NODEPORT_STATUS}, selector istio=ingressgateway, 이미지 주입(auto)"
+awk '/^---/{k=""} /^kind: /{k=$2} k=="Deployment"' "$RENDERED" | grep -qE '^\s*imagePullPolicy: IfNotPresent$' \
+    || die "gateway Deployment 에 imagePullPolicy: IfNotPresent 가 없다(없으면 Kubernetes 가 Always 를 채운다)"
+ok "gateway Service NodePort ${ISTIO_NODEPORT_HTTP}/${ISTIO_NODEPORT_HTTPS}/${ISTIO_NODEPORT_STATUS}, selector istio=ingressgateway, 이미지 주입(auto), imagePullPolicy IfNotPresent"
 
 IC_VALUES="$(mktemp)"; TMP_DIRS+=("$IC_VALUES")
 sed -e "s|__FQDN__|${AS_FQDN:-as.example.internal}|g" -e "s|__UIPATH_REGISTRY__|${ISTIO_SOURCE_REGISTRY}|g" \

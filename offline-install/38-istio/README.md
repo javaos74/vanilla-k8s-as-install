@@ -317,6 +317,14 @@ istiod(`conf/istiod-values.yaml`)는 UiPath 가 Istio 를 직접 설치할 때 �
 
 ingressgateway(`conf/gateway-values.yaml.tmpl`)는 `service.type: NodePort` 와 포트 3개(`status-port` 15021, `http2` 80, `https` 443)다. 포트 이름은 차트 기본값과 같다. 40-haproxy 의 NodePort 자동 탐지가 이 이름으로 찾는다.
 
+ingressgateway 에는 `imagePullPolicy: IfNotPresent` 도 넣는다(charles-weed 실측 뒤 사용자 결정).
+
+- gateway 차트는 컨테이너 이미지를 태그 없는 `image: auto`(주입 자리표시)로 두고 `imagePullPolicy` 기본값이 `""` 다. 그래서 Kubernetes 가 태그 없는 이미지의 기본값 `Always` 를 채운다(https://kubernetes.io/docs/concepts/containers/images/#imagepullpolicy-defaulting).
+- Deployment 에 들어간 이 값이 주입 템플릿의 `global.imagePullPolicy=IfNotPresent` 보다 우선한다. 실측에서 proxyv2 를 containerd 에 미리 넣었는데도 gateway 파드가 뜰 때마다 레지스트리에서 다시 받았다.
+- 그대로 두면 Harbor 가 내려갔을 때, 또는 `--source local` 에어갭에서 gateway 가 뜨지 못한다.
+- 이 값은 gateway Deployment 에만 쓰인다. 사이드카(proxyv2 주입)는 istiod 의 `global.imagePullPolicy` 를 따르고 바꾸지 않았다.
+- `build-bundle.sh` 가 렌더링한 gateway Deployment 에 이 값이 있는지 확인한다.
+
 ### 5.3 `WASM_INSECURE_REGISTRIES` 를 helm 값으로 넣는 이유
 
 UiPath 문서는 ingressgateway Deployment 에 `kubectl patch` 로 `WASM_INSECURE_REGISTRIES` 를 넣는다.

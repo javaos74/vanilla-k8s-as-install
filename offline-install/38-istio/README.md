@@ -268,8 +268,11 @@ hydrate 가 Istio 이미지 2개, 차트 3개, istio-configure 차트, WASM·cur
 
 ### 4.6 검증 상태
 
-**실제 Harbor 경로는 미검증이다.** Harbor 를 설치하지 않고 패키지만 구성하기로 했으므로(사용자 결정) 검증 환경에는 Harbor 가 없다.
-harbor 경로(`helm pull --ca-file`, `helm registry login --registry-config`, `crictl pull`, Harbor API, pull secret)는 `bash -n`, `shellcheck`, `--dry-run` 으로만 확인했다.
+- **Harbor 에서 받아 설치하는 경로(`--source harbor`)는 실기로 검증했다**(2026-11-09, as2510-vanilla 3노드, 기존 Harbor `harbor.myrobots.co.kr`, private 프로젝트 `uipath`, Harbor 2.15.2).
+  - 확인한 것: Harbor API 조회(자격증명), `crictl pull`(3노드), `helm registry login --registry-config` + `helm pull`(CA 파일 없이 OS 신뢰 저장소), 차트 대조(4개 모두 재패키징, 내용 = 핀), pull secret, imageID 판정.
+  - 8개 아티팩트는 이미 Harbor 에 있어 push 하지 않았다.
+- **실제 Harbor 등록(hydrate 실행, push)은 미검증이다.** 검증한 Harbor 는 사용자가 이전에(2026-11-06) 채운 것이다. 어떤 도구로 채웠는지는 확인하지 못했다. 30-harbor 는 설치하지 않았다(사용자 결정).
+- `HARBOR_CA` 파일을 쓰는 경로(`/etc/containerd/certs.d/<host>/hosts.toml` 요구, `--cacert`/`--ca-file`)는 실기로 실행되지 않았다(as2510-vanilla 에는 certs.d 가 없다). `bash -n`, `shellcheck`, `--dry-run` 으로만 확인했다.
 
 ---
 
@@ -548,11 +551,17 @@ charles-weed(2 vCPU, 메모리 3,832MiB, swap 없음) 단일 노드 기준 reque
 | 번들 빌드(`ISTIO_LOCAL_IMAGES=1 build-in-container.sh 24.04 38-istio`) | 완료 (2026-11-07, charles-weed, Ubuntu 24.04). 차트 sha256 = 핀, 렌더링 단언 통과 |
 | `--dry-run --source harbor` / `--source local` (`install.sh`, `istio-configure.sh`) | 완료 (2026-11-07, charles-weed, root·클러스터 없이) |
 | `verify-urls.sh` Istio 절 | 16/16 통과 (2026-11-07) |
-| 단일 노드 실기 설치(`--source local`) + 판정 | **미실행** |
-| istio-configure 실기 설치 + 판정 | **미실행** |
-| HAProxy 경유 판정, 재실행 멱등성 | **미실행** |
-| **실제 Harbor 경로(`--source harbor`)** | **미검증** (4.6절) |
-| AS 라우팅(AS 설치 뒤) | **미검증** |
+| 단일 노드 실기 설치(`--source local`) + 판정 | 완료 (2026-11-08, charles-weed 단일 노드, Ubuntu 24.04). `install.sh` 23/0, HAProxy 경유 포함 `--check-only` 26/0. 그 뒤 VM 연결이 끊겨 local 경로의 재실행 멱등성은 보지 못했다 |
+| istio-configure 실기(`--source local`) | 완료 (2026-11-08, charles-weed). 첫 판정 12/1(Wasm 판정 결함, 고침) → `--check-only` 13/0 |
+| **Harbor 경로(`--source harbor`) 실기 설치 + 판정** | 완료 (2026-11-09, as2510-vanilla 3노드, k8s 1.36.4, 기존 Harbor). `install.sh` 27/0(HAProxy 경유 포함), `istio-configure.sh` 14/0 |
+| 버전·이미지 | `pilot-discovery`/`pilot-agent version -s` = `1.30.3`. 이미지 `<HARBOR>/uipath/istio/{pilot,proxyv2}:1.30.3-20260730_echo`, 다이제스트는 핀과 같다(`ba73c276…`, `9545f8dd…`) |
+| HAProxy 경유 80/443/15021 | 완료 (charles-weed, as2510-vanilla). 443 은 사내 CA 로 검증해 200 `istio-smoke-ok` |
+| 재실행 멱등성 | 완료 (as2510-vanilla). 두 번째 `install.sh`·`istio-configure.sh` 뒤 기존 파드 UID·재시작 수가 같고, pod-template-hash 가 같다. 늘어난 gateway 파드는 HPA 확장이다(12절) |
+| Harbor 차트 대조 | as2510-vanilla Harbor 의 차트 4개가 다시 패키징돼 tgz sha256 이 핀과 달랐다. 내용 대조(4.3절)로 통과 |
+| **실제 Harbor 등록(hydrate 실행, push)** | **미검증** (4.6절) |
+| CA 파일(`certs.d`) 경로 | **미실행** (4.6절) |
+| AS 라우팅(AS 설치 뒤) | **미검증**. Wasm 필터 적재와 smoke 응답까지만 봤다 |
+| 에어갭(`airgap-on.sh`) | **미실시**. 두 환경 모두 인터넷에 연결된 상태였다 |
 
 ---
 
@@ -561,8 +570,11 @@ charles-weed(2 vCPU, 메모리 3,832MiB, swap 없음) 단일 노드 기준 reque
 | 증상 | 원인 | 조치 |
 |---|---|---|
 | `Harbor 에 uipath/istio/pilot:<태그> 가 없다` | hydrate 를 하지 않았거나, 다른 프로젝트·다른 AS 버전으로 했다 | 상위 README 5.2 의 hydrate 를 `<HARBOR_HOSTNAME>/uipath` 로 실행한다. 프로젝트가 다르면 `site.env` 의 `ISTIO_HARBOR_PROJECT` |
-| `Harbor 의 차트 ... sha256 이 versions.env 핀과 다르다` | hydrate 한 AS 번들 버전과 `UIPATH_AS_VERSION` 이 다르다 | 2.3절 절차로 `versions.env` 를 맞추고 번들을 다시 빌드한다 |
+| `Harbor 의 차트 ... 내용이 핀 차트와 다르다` | hydrate 한 AS 번들 버전과 `UIPATH_AS_VERSION` 이 다르다. tgz sha256 만 다른 것은 재패키징이라 통과한다(4.3절) | 2.3절 절차로 `versions.env` 를 맞추고 번들을 다시 빌드한다 |
 | `containerd 가 ... 를 받지 못했다` | 노드가 Harbor CA 를 신뢰하지 않거나(`hosts.toml` 없음), private 인데 자격증명이 틀렸다 | `05-certs/deploy-certs.sh --local`(모든 노드는 `--nodes`). private 이면 `HARBOR_PULL_USER`/`HARBOR_PULL_PASSWORD` |
+| `curl`·`openssl` 로는 Harbor 가 검증되는데 `crictl pull` 만 `x509: certificate signed by unknown authority` | containerd 는 기동할 때 읽은 OS 신뢰 저장소를 계속 쓴다. 그 뒤에 넣은 CA 는 모른다(as2510-vanilla 실측) | 그 노드에서 `sudo systemctl restart containerd`(실행 중인 컨테이너는 유지된다). 05-certs README 9절 |
+| Harbor 노드 재부팅 뒤 `/api/v2.0/ping` 이 401 `'Authorization' should start with 'Harbor-Secret'` | Harbor 컨테이너 IP 가 바뀌었는데 Harbor nginx 가 `core` 를 예전 IP 로 들고 있어 요청이 jobservice 로 간다(as2510-vanilla 실측) | Harbor 호스트에서 `sudo docker restart nginx`(또는 `systemctl restart harbor.service`). 10-k8s `install.sh` 의 Harbor 주석과 같은 계열이다 |
+| Wasm 적재·smoke 판정 직후 gateway 파드가 2~5개로 늘었다 | gateway 차트 기본 HPA(min 1/max 5, CPU 목표 80%, requests 100m). as2510-vanilla 에서는 istio-configure 적재와 판정용 smoke 적용 직후 HPA 가 "cpu resource utilization above target" 으로 1→3→5 로 늘렸다(metrics-server 가 없는 charles-weed 에서는 HPA 가 동작하지 않았다) | 5분 뒤 1개로 줄어든다. 고정하려면 gateway values 의 `autoscaling`·`resources` 를 조정한다(이 번들은 차트 기본값을 쓴다) |
 | `검증용 이미지 묶음이 없다` (`--source local`) | `ISTIO_LOCAL_IMAGES=1` 로 빌드하지 않았거나 다른 디렉터리에 풀었다 | 두 tarball 을 같은 디렉터리에 풀거나 `ISTIO_LOCAL_IMAGES_DIR` 를 준다 |
 | `TLS 원본이 없다` / `SAN 에 ... 이 없다` | `/opt/pki/as` 에 05-certs 산출물이 없거나 `AS_FQDN` 이 인증서와 다르다 | `05-certs/deploy-certs.sh --local`, 다른 위치면 `ISTIO_TLS_CERT_DIR`. `AS_FQDN` 을 바꿨으면 인증서를 다시 발급한다 |
 | `NodePort 를 이미 다른 Service 가 쓴다` | 다른 Service 가 31223/31164/31956 을 쓴다 | 그 Service 를 바꾸거나 `site.env` 의 `ISTIO_NODEPORT_*` 를 바꾸고 38-istio·40-haproxy 를 함께 다시 빌드한다 |

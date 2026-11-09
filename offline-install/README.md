@@ -931,6 +931,24 @@ kubectl -n istio-system get svc istio-ingressgateway -o jsonpath='{.metadata.nam
 kubectl -n istio-system describe secret istio-ingressgateway-certs | sed -n '/^Data/,$p'               # ca.crt / tls.crt / tls.key → ingress_gateway_secret
 ```
 
+#### 5.3.7 검증 상태
+
+자세한 내용은 [38-istio README](38-istio/README.md) 11절에 있습니다.
+
+| 항목 | 환경 | 결과 |
+|---|---|---|
+| `--source local` 설치 + 판정 | charles-weed 단일 노드 (2026-11-08) | `install.sh` 23/0, HAProxy 경유 포함 `--check-only` 26/0, `istio-configure.sh` 13/0 |
+| `--source harbor` 설치 + 판정 | as2510-vanilla 3노드, 기존 Harbor (2026-11-09) | `install.sh` 27/0(HAProxy 경유 포함), `istio-configure.sh` 14/0 |
+| HAProxy 경유 80/443/15021 | 두 환경 | 200. 443 은 사내 CA 로 검증 |
+| 재실행 멱등성 | as2510-vanilla | 기존 파드 UID·재시작 수 같음. 늘어난 gateway 파드는 HPA 확장 |
+| **실제 Harbor 등록(hydrate 실행, push)** | — | **미검증** |
+| AS 라우팅, 에어갭(`airgap-on.sh`) | — | **미검증 / 미실시** |
+
+as2510-vanilla 에서 찾은 주의점:
+
+- 사내 CA 를 OS 신뢰 저장소에만 넣었다면, 그 뒤 노드마다 `sudo systemctl restart containerd` 가 필요할 수 있습니다. containerd 는 기동할 때 읽은 신뢰 저장소를 계속 씁니다(05-certs README 9절).
+- Harbor 차트는 다시 패키징돼 tgz sha256 이 핀과 다를 수 있습니다. 38-istio 는 이때 내용을 비교합니다(38-istio README 4.3절).
+
 ---
 
 ### 5.4 사전 요구조건 점검 (Prerequisites Check)

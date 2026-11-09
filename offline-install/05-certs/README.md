@@ -360,6 +360,7 @@ errorlog: The certificate [Certificate File:'/var/opt/mssql/certs/mssql.pem',
 | `x509: certificate signed by unknown authority` | CA 미신뢰 | `deploy-certs.sh --local`. docker 는 `certs.d`, k8s 는 containerd 쪽 |
 | 파드만 이미지 pull 실패(docker 는 성공) | containerd 신뢰가 없다 | 4절. `config_path` 와 `hosts.toml` 확인 |
 | `update-ca-certificates` 했는데 신뢰되지 않음 | 확장자가 `.crt` 가 아니다 | `.pem` 은 조용히 무시된다 |
+| CA 를 OS 신뢰 저장소에 넣은 뒤 `curl`·`openssl` 은 되는데 파드(crictl)만 `x509: certificate signed by unknown authority` | `config_path` 가 비어 있으면 containerd 는 OS 신뢰 저장소로 검증하는데, **기동할 때 한 번 읽은 저장소를 계속 쓴다.** 그 뒤에 넣은 CA 는 재시작 전까지 모른다(as2510-vanilla 실측 2026-11-09: containerd 11-04 기동, CA 11-06 추가) | 노드마다 `sudo systemctl restart containerd`(실행 중인 컨테이너는 유지된다). 또는 `deploy-certs.sh --local` 로 `certs.d`+`config_path` 를 설정한다(이 스크립트는 containerd 를 재시작한다) |
 | SQL Server 가 인증서를 무시 | 소유권/권한 | 5절. `10001:10001`, 파일 0600, 디렉터리 0700. errorlog 확인 |
 | PostgreSQL 기동 실패 `private key file has group or world access` | 키 권한 | uid 999 소유 + 0600 |
 | SeaweedFS 기동 직후 종료 `permission denied` | 키·`s3.json` 이 root 소유 | uid 1000 소유 + 0600 (5절) |

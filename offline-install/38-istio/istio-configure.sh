@@ -247,5 +247,5 @@ run_checks "$SOURCE" || rc=$?
 
 step "다음 단계"
 echo "  게이트웨이·smoke 가 그대로인지 본다:  sudo ./install.sh --check-only"
-echo "  AS input.json: exclude_components 에 istio, istio-configure (README 5.3절)"
+echo "  AS input.json: exclude_components 에 istio, istio-configure (상위 README 5.1절)"
 exit $rc

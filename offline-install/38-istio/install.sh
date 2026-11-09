@@ -413,5 +413,5 @@ step "다음 단계"
 echo "  1) 40-haproxy 번들 디렉터리에서 sudo ./install.sh 를 (다시) 실행해 NodePort 를 반영한다."
 echo "     그 뒤 여기서 HAProxy 경유까지 본다:  sudo ./install.sh --check-only"
 echo "  2) UiPath istio-configure(WASM 플러그인):              sudo ./istio-configure.sh$([[ "$SOURCE" == local ]] && echo ' --source local')"
-echo "  3) input.json: exclude_components 에 istio, istio-configure / ingress 블록 (README 5.3절)"
+echo "  3) input.json: exclude_components 에 istio, istio-configure / ingress 블록 (상위 README 5.1절, 확인은 5.3.6절)"
 exit $rc

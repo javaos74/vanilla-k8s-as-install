@@ -269,8 +269,43 @@ harbor_cri_pull() {   # $1=이미지 ref
     ok "containerd 에서 Harbor pull 확인: ${1}"
 }
 
-# Harbor OCI 에서 차트를 받아 sha256 을 핀과 대조한다. 결과 경로는 PULLED_CHART.
-# hydrate 는 차트 tgz 를 helm push 로 그대로 올리므로 레이어 = 원본 tgz 이어야 한다.
+# 두 차트 tgz 의 내용이 같은가. $1=Harbor tgz $2=번들 tgz.
+#
+# 비교 범위: 압축을 푼 차트 디렉터리 전체를 diff -r 로 본다. 파일과 디렉터리 이름(경로) 집합,
+#   그리고 모든 일반 파일의 바이트 내용이다(Chart.yaml, values*.yaml, templates/, crds/,
+#   files/, README 등 차트에 든 것 전부. 하위 차트 charts/*.tgz 는 tgz 바이트로 비교된다).
+# 무시하는 것: tar 메타데이터(항목 시각, 소유자 uid/gid·이름), 파일 모드(diff 는 권한을
+#   보지 않는다. helm 도 차트 파일 권한을 쓰지 않는다), tar 항목 순서, gzip 헤더·압축 바이트.
+#   다시 패키징하면 이것들만 바뀐다(as2510-vanilla 실측 2026-11-09).
+# 결과: 같으면 0. CHART_DIFF_FILES = 비교한 파일 수, CHART_DIFF_OUT = 다른 곳(최대 10줄).
+chart_content_same() {
+    local a="$1" b="$2" da db
+    require_cmds tar diff
+    mktemp_tracked -d; da="$TMP_LAST"
+    mktemp_tracked -d; db="$TMP_LAST"
+    CHART_DIFF_FILES=0; CHART_DIFF_OUT=""
+    tar -C "$da" --no-same-owner -xzf "$a" 2>/dev/null || { CHART_DIFF_OUT="Harbor tgz 를 풀지 못했다"; return 1; }
+    tar -C "$db" --no-same-owner -xzf "$b" 2>/dev/null || { CHART_DIFF_OUT="번들 tgz 를 풀지 못했다"; return 1; }
+    CHART_DIFF_FILES="$(find "$db" -type f | wc -l)"
+    if diff -r "$da" "$db" >/dev/null 2>&1; then
+        return 0
+    fi
+    CHART_DIFF_OUT="$(diff -rq "$da" "$db" 2>&1 | sed -e "s|${da}|<harbor>|g" -e "s|${db}|<bundle>|g" | head -10 || true)"
+    return 1
+}
+
+# Harbor OCI 에서 차트를 받아 핀과 대조한다. 결과 경로는 PULLED_CHART(Harbor 에서 받은 tgz).
+#
+# 1) tgz sha256 이 versions.env 핀과 같으면 통과한다.
+# 2) 다르면 번들의 같은 차트(SHA256SUMS 로 검증됐고, 여기서 다시 sha256 = 핀을 확인한다)와
+#    내용을 비교한다(chart_content_same). 같으면 "재패키징, 내용 = 핀" 으로 통과하고
+#    Harbor 차트로 설치한다. 다르면 멈춘다.
+#
+# 왜 2) 가 필요한가: Harbor 에 있는 차트 tgz 가 원본과 바이트까지 같다는 보장이 없다.
+#   UIPATH_AS_VERSION 의 hydrate-registry.sh(import_sf_charts)는 번들 tgz 를 helm push 로 그대로 올리지만,
+#   as2510-vanilla 의 Harbor 차트 4개는 tar 항목 시각이 push_time(2026-11-06 03:01)과 같아
+#   올리기 직전에 다시 패키징된 것이었다. 내용은 diff -r 로 핀 차트와 같았고 tgz sha256 만 달랐다.
+#   어떤 도구로 올렸는지는 확인하지 못했다.
 HELM_REGCFG=""
 harbor_chart_pull() {   # $1=OCI 경로(vendor/base) $2=버전 $3=sha256 핀
     local ref="$1" ver="$2" pin="$3" f got
@@ -293,9 +328,26 @@ harbor_chart_pull() {   # $1=OCI 경로(vendor/base) $2=버전 $3=sha256 핀
     f="${TMP_LAST}/${ref##*/}-${ver}.tgz"
     [[ -f "$f" ]] || die "받은 차트 파일이 예상과 다르다: $(ls "$TMP_LAST")"
     got="$(sha256_of "$f")"
-    [[ "$got" == "$pin" ]] \
-        || die "Harbor 의 차트 ${ref} ${ver} sha256(${got})이 versions.env 핀(${pin})과 다르다. hydrate 한 AS 번들 버전을 확인할 것."
-    ok "Harbor 차트 oci://${HARBOR_REGISTRY}/${ref} ${ver} (sha256 = 핀)"
+    if [[ "$got" == "$pin" ]]; then
+        ok "Harbor 차트 oci://${HARBOR_REGISTRY}/${ref} ${ver} (tgz sha256 = 핀 ${pin})"
+    else
+        local own own_sha
+        own="$(bundle_chart "$ref" "$ver")"
+        [[ -f "$own" ]] \
+            || die "Harbor 의 차트 ${ref} ${ver} tgz sha256(${got})이 핀(${pin})과 다르고, 내용을 비교할 번들 차트가 없다: ${own}"
+        own_sha="$(sha256_of "$own")"
+        [[ "$own_sha" == "$pin" ]] \
+            || die "번들 차트 ${own} 의 sha256(${own_sha})이 핀(${pin})과 다르다. 번들을 다시 빌드할 것."
+        log "Harbor 차트 ${ref} ${ver}: tgz sha256 이 핀과 다르다. 번들 차트와 내용을 비교한다."
+        log "  Harbor tgz sha256 ${got}"
+        log "  번들   tgz sha256 ${own_sha} (= 핀)"
+        if chart_content_same "$f" "$own"; then
+            ok "Harbor 차트 oci://${HARBOR_REGISTRY}/${ref} ${ver} 재패키징, 내용 = 핀 (diff -r: 파일 ${CHART_DIFF_FILES}개 같음, tar 메타데이터만 다름)"
+        else
+            printf '%s\n' "$CHART_DIFF_OUT" | sed 's/^/    /' >&2
+            die "Harbor 의 차트 ${ref} ${ver} 내용이 핀 차트와 다르다(diff -r, 위 목록). hydrate 한 AS 번들 버전이 UIPATH_AS_VERSION 과 같은지 확인할 것."
+        fi
+    fi
     PULLED_CHART="$f"
 }
 

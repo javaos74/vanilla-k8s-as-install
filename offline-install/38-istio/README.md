@@ -70,7 +70,7 @@ AS 설치기가 Istio 를 다시 설치하거나 `istio-configure` 를 덮어쓰
   AS 번들과 같은 아티팩트라 hydrate 한 번으로 Harbor 에 올라가고, UiPath 가 검증한 조합과 같다.
 - 1.30 은 EOL 예정이 2026-12경이고 Kubernetes 1.32~1.36 을 지원한다(저장소의 k8s 1.36.4 포함).
   https://istio.io/latest/docs/releases/supported-releases/
-- 다이제스트를 고정한다. 검증용 이미지 묶음은 다이제스트로 받고, 차트는 tgz sha256 을 핀과 대조한다.
+- 다이제스트를 고정한다. 검증용 이미지 묶음은 다이제스트로 받고, 차트는 tgz sha256 을 핀과 대조한다(Harbor 차트가 다시 패키징돼 tgz 만 다르면 내용을 비교한다, 4.3절).
   Harbor 사본의 이미지 다이제스트는 원본과 다를 수 있어 설치는 태그로 참조한다(4절).
 
 ### 2.2 왜 `vendor/istiod` 이고 UiPath 래퍼 `helm/istiod` 가 아닌가
@@ -143,7 +143,7 @@ istio-1.30.3/                         (tar.gz 약 190KB)
 ```
 
 - 이미지는 넣지 않는다. 운영에서는 AS hydrate 가 Harbor 에 올린 것을 받는다(4절). 넣으면 같은 이미지를 두 번 옮기게 된다.
-- 차트는 넣는다(합계 약 146KB). `--source local` 설치, `--dry-run` 렌더링에 쓴다. Harbor 에 올라가는 차트와 같은 바이트다(sha256 핀).
+- 차트는 넣는다(합계 약 146KB). `--source local` 설치, `--dry-run` 렌더링에 쓴다. registry.uipath.com 원본과 같은 바이트다(sha256 핀). `--source harbor` 에서 Harbor 차트의 tgz sha256 이 핀과 다르면 이 차트와 내용을 비교한다(4.3절).
 - `gateway-values.yaml.tmpl` 의 NodePort 는 `install.sh` 가 실행 때 `ISTIO_NODEPORT_*` 로 채운다. 타깃에서 `site.env` 로 NodePort 를 바꿔도 `40-haproxy`(실행 때 같은 변수를 읽는다)와 어긋나지 않게 하려는 것이다.
 
 ### 3.2 검증용 이미지 묶음 `istio-local-images-1.30.3` (단일 노드 전용)
@@ -220,7 +220,17 @@ hydrate 가 Istio 이미지 2개, 차트 3개, istio-configure 차트, WASM·cur
 
 - hydrate 는 이미지를 `podman load` → `podman push --tls-verify=false` 로 올린다. 매니페스트를 다시 만들 수 있어 **Harbor 의 이미지 다이제스트는 registry.uipath.com 원본과 다를 수 있다.**
   그래서 harbor 경로는 이미지를 **태그**로 참조하고 다이제스트 일치는 판정하지 않는다. 35-metrics-server 도 같은 현상을 실측했다(그 README 4절).
-- 차트는 `helm push` 가 tgz 를 그대로 레이어로 올린다. 그래서 `install.sh`/`istio-configure.sh` 는 Harbor 에서 `helm pull` 한 tgz 의 sha256 을 `versions.env` 핀과 대조하고, 다르면 멈춘다. 다르면 hydrate 한 AS 번들 버전이 `UIPATH_AS_VERSION` 과 다른 경우가 많다.
+- 차트도 Harbor 의 tgz 가 원본과 **바이트까지 같다는 보장이 없다.**
+  - `hydrate-registry.sh`(2.2510.4, `import_sf_charts`)는 번들의 tgz 를 `helm push` 로 그대로 올린다.
+  - 하지만 as2510-vanilla 의 Harbor 차트 4개는 tar 항목 시각이 Harbor `push_time`(2026-11-06 03:01)과 같았다. 올리기 직전에 다시 패키징된 것이다. 어떤 도구로 올렸는지는 확인하지 못했다.
+  - 풀어 놓은 내용은 `diff -r` 로 핀 차트와 같았고, tgz sha256 만 달랐다(2026-11-09 실측).
+- 그래서 `install.sh`/`istio-configure.sh` 는 Harbor 에서 `helm pull` 한 차트를 두 단계로 대조한다(`istio-lib.sh` 의 `harbor_chart_pull`).
+  1. tgz sha256 이 `versions.env` 핀과 같으면 통과한다.
+  2. 다르면 번들의 같은 차트와 내용을 비교한다. 번들 차트는 `SHA256SUMS` 로 검증됐고, 여기서 다시 sha256 = 핀을 확인한다. 같으면 `재패키징, 내용 = 핀` 으로 통과하고 Harbor 에서 받은 차트로 설치한다. 다르면 멈춘다. 다르면 hydrate 한 AS 번들 버전이 `UIPATH_AS_VERSION` 과 다른 경우가 많다.
+- 내용 비교의 기준
+  - 비교 범위: 압축을 푼 차트 디렉터리 전체를 `diff -r` 로 본다. 파일·디렉터리 이름(경로) 집합과 모든 일반 파일의 바이트 내용이다. `Chart.yaml`, `values*.yaml`, `templates/`, `crds/`, `files/`, README 등 차트에 든 것 전부가 들어간다. 하위 차트(`charts/*.tgz`)는 tgz 바이트로 비교한다.
+  - 무시하는 것: tar 메타데이터(항목 시각, 소유자 uid/gid·이름), 파일 모드(`diff` 는 권한을 보지 않고, helm 도 차트 파일 권한을 쓰지 않는다), tar 항목 순서, gzip 헤더와 압축 바이트. 다시 패키징하면 이것들만 바뀐다.
+  - 판정 로그에는 두 tgz 의 sha256, 비교한 파일 수, 결과를 남긴다. 다르면 다른 경로를 최대 10줄 출력한다.
 
 ### 4.4 사전 확인 (`--source harbor`)
 
@@ -235,7 +245,7 @@ hydrate 가 Istio 이미지 2개, 차트 3개, istio-configure 차트, WASM·cur
 5. 익명 `GET /api/v2.0/projects/<project>` 로 public 여부를 본다. private 이면 자격증명으로 다시 읽는다.
 6. Harbor API(`/api/v2.0/projects/<p>/repositories/<repo, '/' 는 %252F>/artifacts/<태그>`)로 이미지가 있는지 본다.
 7. `crictl pull` 로 containerd(kubelet 경로)가 실제로 받는지 본다. 실패하면 파드가 `ImagePullBackOff` 가 되므로 설치 전에 멈춘다.
-8. `helm pull oci://… [--ca-file <CA>]` 로 차트를 받아 sha256 을 대조한다(4.3절).
+8. `helm pull oci://… [--ca-file <CA>]` 로 차트를 받아 sha256 을 대조한다. 다르면 번들 차트와 내용을 비교한다(4.3절).
 
 ### 4.5 인증과 CA
 

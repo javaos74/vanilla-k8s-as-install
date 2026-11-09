@@ -76,7 +76,7 @@ do_dry_run() {
             echo "  $(harbor_artifact_url "${a%:*}" "${a##*:}")"
             echo "  crictl pull ${reg}/${a}"
         done
-        echo "  helm pull oci://${reg}/${UIPATH_ISTIO_CONFIGURE_CHART} --version ${UIPATH_ISTIO_CONFIGURE_VERSION} --ca-file ${HARBOR_CA:-<없음: OS 신뢰 저장소>}  (sha256 대조)"
+        echo "  helm pull oci://${reg}/${UIPATH_ISTIO_CONFIGURE_CHART} --version ${UIPATH_ISTIO_CONFIGURE_VERSION} --ca-file ${HARBOR_CA:-<없음: OS 신뢰 저장소>}  (sha256 대조, 다르면 번들 차트와 내용 대조)"
     else
         echo "  ctr -n k8s.io images import <tar>  ← ${UIPATH_WASM_IMAGE}, ${UIPATH_ISTIO_CURL_IMAGE} (${LOCAL_IMAGES_DIR})"
     fi

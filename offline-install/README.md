@@ -796,6 +796,8 @@ curl -s --cacert "$CA" -u "$AUTH" -o /dev/null -w '%{http_code}\n' \
 helm pull oci://${H}/uipath/vendor/istiod --version v1.30.3 && sha256sum istiod-v1.30.3.tgz
 ```
 
+차트 tgz sha256 이 핀과 달라도 곧바로 잘못된 것은 아닙니다. Harbor 에 올릴 때 차트를 다시 패키징하면 tar 시각만 바뀌어 tgz 해시가 달라집니다(as2510-vanilla 실측). 38-istio 의 `install.sh`/`istio-configure.sh` 는 이때 번들 차트와 내용을 `diff -r` 로 비교해, 같으면 설치하고 다르면 멈춥니다(38-istio README 4.3절).
+
 #### 5.2.7 모든 노드가 Harbor 를 신뢰하게 하기
 
 AS 파드와 Istio 사이드카는 어느 노드에도 뜹니다. worker 를 포함한 **모든 노드**가 `HARBOR_HOSTNAME` 을 해석하고(`/etc/hosts` 또는 사내 DNS) containerd 가 CA 를 신뢰해야 합니다.
@@ -872,7 +874,7 @@ done                                                   # 모두 200 이어야 �
 ./istio-configure.sh --dry-run --source harbor
 ```
 
-`install.sh` 와 `istio-configure.sh` 는 설치 전에 같은 확인을 스스로 합니다. Harbor 이름 해석, CA, containerd `hosts.toml`, `/api/v2.0/ping`, 프로젝트 public 여부, 이미지 존재(Harbor API), `crictl pull`, 차트 `helm pull` + sha256 대조 순서이고, 하나라도 실패하면 아무것도 바꾸지 않고 멈춥니다. Harbor 사본의 이미지 다이제스트는 원본과 다를 수 있어(5.2.5절 주의점 5) 이미지는 태그로 참조하고, 차트만 sha256 을 핀과 대조합니다.
+`install.sh` 와 `istio-configure.sh` 는 설치 전에 같은 확인을 스스로 합니다. Harbor 이름 해석, CA, containerd `hosts.toml`, `/api/v2.0/ping`, 프로젝트 public 여부, 이미지 존재(Harbor API), `crictl pull`, 차트 `helm pull` + sha256 대조 순서이고, 하나라도 실패하면 아무것도 바꾸지 않고 멈춥니다. Harbor 사본의 이미지 다이제스트는 원본과 다를 수 있어(5.2.5절 주의점 5) 이미지는 태그로 참조하고, 차트만 핀과 대조합니다. 차트 tgz sha256 이 다르면 번들 차트와 내용(`diff -r`)을 비교해 같을 때만 설치합니다(38-istio README 4.3절).
 
 > [!WARNING]
 > **실제 Harbor 경로는 미검증입니다.** `--source harbor` 의 Harbor 접근(`helm pull --ca-file`, `helm registry login`, `crictl pull`, Harbor API, pull secret)은 `bash -n`, `shellcheck`, `--dry-run` 으로만 확인했습니다.

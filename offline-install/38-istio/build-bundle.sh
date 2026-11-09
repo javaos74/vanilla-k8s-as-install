@@ -21,9 +21,10 @@
 #   두 번 옮기게 된다.
 #
 # 왜 차트는 넣는가:
-#   --source local 설치와 --dry-run 렌더링에 쓴다. 합계 약 146KB 이고, Harbor 에
-#   올라가는 차트와 같은 바이트다(sha256 핀). harbor 경로에서는 Harbor 에서 받은
-#   차트를 이 핀과 대조한다.
+#   --source local 설치와 --dry-run 렌더링에 쓴다. 합계 약 146KB 이고, registry.uipath.com
+#   원본과 같은 바이트다(sha256 핀). harbor 경로에서는 Harbor 에서 받은 차트를 이 핀과
+#   대조하고, Harbor 차트가 다시 패키징돼 tgz sha256 만 다르면 이 번들 차트와 내용을
+#   비교한다(istio-lib.sh harbor_chart_pull, README 4.3절).
 #
 # 원본은 registry.uipath.com 이다. 이미지·차트 모두 익명으로 받을 수 있다(2026-11-07 확인).
 # OS 의존 없음. 22.04 / 24.04 / 26.04 / el9 / el10 공용.

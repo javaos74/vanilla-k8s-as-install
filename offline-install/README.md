@@ -640,7 +640,7 @@ Istio 서비스 메시는 AS 설치기에 맡기지 않고 `38-istio` 로 직접
    > [!NOTE]
    > **`exclude_components` 와 `ingress`**: Istio 는 `38-istio` 가 설치하므로(5.3절) AS 설치기가 다시 설치하지 않게 `istio`, `istio-configure` 를 뺍니다. `ingress` 값은 UiPath 문서([서비스 메시 설치·구성](https://docs.uipath.com/automation-suite/automation-suite/2.2510/installation-guide-eks-aks/installing-and-configuring-the-service-mesh))의 기본값이고, `38-istio` 가 만드는 이름(`versions.env` 의 `ISTIO_NAMESPACE`, `ISTIO_GATEWAY_NAME`, `ISTIO_TLS_SECRET`)과 같습니다. 확인 명령은 5.3.6절입니다.
    > - `38-istio/istio-configure.sh` 를 쓰지 않고 istio-configure 를 AS 설치기(admin 권한 kubeconfig)에 맡기려면 `exclude_components` 에서 `istio-configure` 를 뺍니다.
-   > - 참고 저장소([automation-suite-on-samsung-cloud-ske](https://github.com/javaos74/automation-suite-on-samsung-cloud-ske) `ko/input-ske.json`)는 `input.json` 에 `"cluster_type": "exclusive"`, `"kubernetes_distribution": "vanilla"` 를 넣습니다. UiPath 문서 예시는 aks/eks 만 적고 있어 이 키는 위 예시에 넣지 않았습니다(미검증). `38-istio` 의 istio-configure values 는 같은 값(`exclusive` / `vanilla`)을 씁니다.
+   > - `input.json` 에 `cluster_type`·`kubernetes_distribution` 키를 둘 때는 `"cluster_type": "exclusive"`, `"kubernetes_distribution": "vanilla"` 로 씁니다. `38-istio` 의 istio-configure values(`global.cluster_type`, `global.kubernetesDistribution`)와 같은 값이고, 참고 저장소([automation-suite-on-samsung-cloud-ske](https://github.com/javaos74/automation-suite-on-samsung-cloud-ske) `ko/input-ske.json`)도 같은 값을 넣습니다. UiPath 문서 예시는 aks/eks 값만 적고 있어 `vanilla` 값은 UiPath 문서로 확인하지 못했습니다(미검증).
 
    > [!NOTE]
    > 위 예시의 포트는 기본값입니다. `external_object_storage.port` 와 `sql.port` 는 `site.env` 의 `MINIO_PORT`(SeaweedFS 면 `SEAWEEDFS_S3_PORT`)와 `MSSQL_PORT` 에 맞춥니다. PostgreSQL 을 쓰면 `postgresql.port` 를 `POSTGRES_PORT` 에 맞춥니다. 기본값이 아니면 연결 문자열 템플릿도 고쳐야 합니다(2.1절 "서비스 포트를 바꿀 때").
@@ -718,11 +718,21 @@ podman --version && helm version --short
 #    hydrate 의 helm push 는 OS 신뢰 저장소로 Harbor 인증서를 검증합니다.
 cd offline-install/05-certs && sudo ./deploy-certs.sh --local
 
-# 2) Harbor 에 uipath 프로젝트를 먼저 만듭니다(웹 UI 또는 API). 이미 있으면 409 가 납니다.
-H=<HARBOR_HOSTNAME>
-curl -fsS --cacert /opt/pki/ca/ca.crt -u 'admin:<HARBOR_ADMIN_PASSWORD>' \
-  -H 'Content-Type: application/json' -X POST "https://${H}/api/v2.0/projects" \
+# 2) Harbor API 호출 준비. 비밀번호를 curl -u 나 셸 변수 대입으로 명령줄에 쓰면 셸 히스토리와
+#    프로세스 인자(ps)에 남습니다. 프롬프트로 읽어 curl 설정을 stdin(-K -)으로 넘깁니다.
+#    (38-istio istio-lib.sh 의 hcurl_auth 와 같은 방식. printf 는 셸 내장이라 인자에 남지 않습니다)
+#    5.2.6절·5.3.2절의 확인 명령도 이 hapi 를 씁니다. 새 셸이면 아래 H= 부터 hapi 정의까지 다시 실행합니다.
+H=<HARBOR_HOSTNAME>; CA=/opt/pki/ca/ca.crt
+read -r -p 'Harbor 계정: ' HU; read -rs -p 'Harbor 비밀번호: ' HP; echo
+hapi() {   # curl 설정 문법에 맞게 \ 와 " 를 이스케이프합니다
+  local u="${HU//\\/\\\\}" p="${HP//\\/\\\\}"; u="${u//\"/\\\"}"; p="${p//\"/\\\"}"
+  printf 'user = "%s:%s"\n' "$u" "$p" | curl -K - --cacert "$CA" "$@"
+}
+
+# 3) Harbor 에 uipath 프로젝트를 먼저 만듭니다(웹 UI 또는 API, 계정은 admin). 이미 있으면 409 가 납니다.
+hapi -fsS -H 'Content-Type: application/json' -X POST "https://${H}/api/v2.0/projects" \
   -d '{"project_name":"uipath","metadata":{"public":"false"}}'
+# 다 쓰면(5.2.6절 확인 뒤) unset HU HP 로 지웁니다.
 ```
 
 - 프로젝트 이름은 `input.json` 의 `registries.docker.url` / `registries.helm.url`(`<HARBOR_HOSTNAME>/uipath`)과 `versions.env` 의 `ISTIO_HARBOR_PROJECT`(기본 `uipath`)에 맞춥니다.
@@ -783,17 +793,19 @@ Document Understanding 오프라인 번들은 `--optional-bundle-path` 로 따�
 확인 명령:
 
 ```bash
-H=<HARBOR_HOSTNAME>; CA=/opt/pki/ca/ca.crt; AUTH='<계정>:<비밀번호>'
+# H, CA, HU/HP(프롬프트), hapi 는 5.2.3절 2) 에서 정의합니다(비밀번호를 명령줄에 쓰지 않습니다).
 
 # 프로젝트 요약(저장소 수)
-curl -fsS --cacert "$CA" -u "$AUTH" "https://${H}/api/v2.0/projects/uipath/summary"
+hapi -fsS "https://${H}/api/v2.0/projects/uipath/summary"
 
 # 특정 이미지 (저장소 이름의 '/' 는 %252F 로 두 번 인코딩합니다)
-curl -s --cacert "$CA" -u "$AUTH" -o /dev/null -w '%{http_code}\n' \
+hapi -s -o /dev/null -w '%{http_code}\n' \
   "https://${H}/api/v2.0/projects/uipath/repositories/istio%252Fpilot/artifacts/1.30.3-20260730_echo"   # 200
 
 # 차트를 받아 보고 sha256 을 versions.env 핀과 비교 (ISTIO_ISTIOD_CHART_SHA256 = b4df1f0f…)
 helm pull oci://${H}/uipath/vendor/istiod --version v1.30.3 && sha256sum istiod-v1.30.3.tgz
+
+unset HU HP
 ```
 
 차트 tgz sha256 이 핀과 달라도 곧바로 잘못된 것은 아닙니다. Harbor 에 올릴 때 차트를 다시 패키징하면 tar 시각만 바뀌어 tgz 해시가 달라집니다(as2510-vanilla 실측). 38-istio 의 `install.sh`/`istio-configure.sh` 는 이때 번들 차트와 내용을 `diff -r` 로 비교해, 같으면 설치하고 다르면 멈춥니다(38-istio README 4.3절).
@@ -860,14 +872,16 @@ tar xzf istio-1.30.3.tar.gz && cd istio-1.30.3
 | istio-configure | `oci://<HARBOR_HOSTNAME>/uipath/helm/istio-configure` `--version 2.2510.4` |
 
 ```bash
-H=<HARBOR_HOSTNAME>; CA=/opt/pki/ca/ca.crt; AUTH='<계정>:<비밀번호>'   # public 프로젝트면 -u 를 빼도 됩니다
+# H, CA, HU/HP(프롬프트), hapi 는 5.2.3절 2) 에서 정의합니다(비밀번호를 명령줄에 쓰지 않습니다).
+# public 프로젝트면 hapi 대신 curl --cacert "$CA" 를 써도 됩니다.
 for a in istio%252Fpilot/artifacts/1.30.3-20260730_echo istio%252Fproxyv2/artifacts/1.30.3-20260730_echo \
          istio-wasm-plugin/artifacts/2.2510.4 curlimages%252Fcurl/artifacts/2026.05.11 \
          vendor%252Fbase/artifacts/v1.30.3 vendor%252Fistiod/artifacts/v1.30.3 vendor%252Fgateway/artifacts/v1.30.3 \
          helm%252Fistio-configure/artifacts/2.2510.4; do
-  printf '%-52s %s\n' "$a" "$(curl -s --cacert "$CA" -u "$AUTH" -o /dev/null -w '%{http_code}' \
+  printf '%-52s %s\n' "$a" "$(hapi -s -o /dev/null -w '%{http_code}' \
     "https://${H}/api/v2.0/projects/uipath/repositories/${a}")"
 done                                                   # 모두 200 이어야 합니다
+unset HU HP
 
 # root·클러스터 없이 설치할 이미지·차트 경로와 명령을 미리 봅니다
 ./install.sh --dry-run --source harbor
@@ -897,6 +911,7 @@ sudo ./install.sh                  # = --source harbor. istio-base → istiod �
 - **TLS secret:** `istio-system/istio-ingressgateway-certs` 를 `/opt/pki/as/{fullchain.crt,tls.key,ca.crt}` 로 만듭니다(`tls.crt` = 서버 인증서 + 체인). 설치 전에 SAN(`AS_FQDN`, `*.AS_FQDN`), 키 짝, CA 검증을 확인하고 틀리면 멈춥니다.
 - **NodePort:** `http2=31223`, `https=31164`, `status-port=31956`(`versions.env` 의 `ISTIO_NODEPORT_*`, `site.env` 로 변경 가능)으로 고정합니다. 같은 NodePort 를 쓰는 다른 Service 가 있으면 멈춥니다.
 - 출력 끝이 `검증 결과: 통과 N / 실패 0` 이어야 합니다. 다시 실행해도 결과가 같습니다(`helm upgrade --install`).
+- **이전에 다른 helm 릴리스 이름으로 Istio 를 설치했던 클러스터:** Istio CRD 는 차트의 `helm.sh/resource-policy: keep` 때문에 uninstall 뒤에도 남고, 소유 annotation 이 이전 릴리스(예: `base`)를 가리킵니다. 그대로 실행하면 `helm upgrade --install istio-base` 가 `invalid ownership metadata ... must equal "istio-base"` 로 멈춥니다. 설치 전에 38-istio README 12.1절대로 CRD 소유 annotation 을 바꾸고, 없는 istiod 를 가리키는 `failurePolicy: Fail` webhook 을 정리합니다. `install.sh` 는 이 정리를 하지 않습니다.
 
 #### 5.3.4 istio-configure (WASM 라우팅 플러그인)
 
@@ -943,14 +958,16 @@ kubectl -n istio-system describe secret istio-ingressgateway-certs | sed -n '/^D
 | 항목 | 환경 | 결과 |
 |---|---|---|
 | `--source local` 설치 + 판정 | charles-weed 단일 노드 (2026-11-08) | `install.sh` 23/0, HAProxy 경유 포함 `--check-only` 26/0, `istio-configure.sh` 13/0 |
-| `--source harbor` 설치 + 판정 | as2510-vanilla 3노드, 기존 Harbor (2026-11-09) | `install.sh` 27/0(HAProxy 경유 포함), `istio-configure.sh` 14/0 |
+| `--source harbor` 설치 + 판정 | as2510-vanilla 3노드, 기존 Harbor (2026-11-09) | `install.sh` 27/0(HAProxy 경유 포함), `istio-configure.sh` 14/0. 이전 Istio 잔여물(CRD 15개 소유 annotation `base` → `istio-base`, 대상 없는 webhook 2개 삭제)을 손으로 정리한 뒤의 결과 |
 | HAProxy 경유 80/443/15021 | 두 환경 | 200. 443 은 사내 CA 로 검증 |
 | 재실행 멱등성 | as2510-vanilla | 기존 파드 UID·재시작 수 같음. 늘어난 gateway 파드는 HPA 확장 |
 | **실제 Harbor 등록(hydrate 실행, push)** | — | **미검증** |
 | AS 라우팅, 에어갭(`airgap-on.sh`) | — | **미검증 / 미실시** |
+| Harbor 중단·에어갭에서 gateway 기동(`imagePullPolicy: IfNotPresent`) | — | **미검증**. as2510-vanilla 에서 노드별 첫 gateway 파드는 이미지가 있는데도 Harbor 에서 다시 받았습니다(원인 미확인) |
 
 as2510-vanilla 에서 찾은 주의점:
 
+- 다른 helm 릴리스 이름으로 Istio 를 설치했던 클러스터는 설치 전에 CRD 소유 annotation 과 대상 없는 webhook 을 정리해야 합니다(5.3.3절, 38-istio README 12.1절).
 - 사내 CA 를 OS 신뢰 저장소에만 넣었다면, 그 뒤 노드마다 `sudo systemctl restart containerd` 가 필요할 수 있습니다. containerd 는 기동할 때 읽은 신뢰 저장소를 계속 씁니다(05-certs README 9절).
 - Harbor 차트는 다시 패키징돼 tgz sha256 이 핀과 다를 수 있습니다. 38-istio 는 이때 내용을 비교합니다(38-istio README 4.3절).
 

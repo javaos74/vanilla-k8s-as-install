@@ -254,6 +254,9 @@ hydrate 가 Istio 이미지 2개, 차트 3개, istio-configure 차트, WASM·cur
   1. `HARBOR_PULL_USER` / `HARBOR_PULL_PASSWORD` (Harbor robot 계정 권장)
   2. 35-metrics-server 와 같은 순서: `HARBOR_USER` / `HARBOR_PASSWORD` → `site.env` 의 `HARBOR_ADMIN_PASSWORD`(admin) → `/opt/harbor/.harbor-credentials`. 이때는 robot 계정을 쓰라는 경고를 낸다.
   - `install.sh` 가 `istio-system` 에 `uipathpullsecret`(`ISTIO_PULL_SECRET`)을 만들고 istiod·gateway 에 붙인다. `istio-configure.sh` 는 그 secret 이 있을 때만 values 에 넣는다.
+  - **2번 경로로 설치하면 그 계정의 비밀번호가 pull secret 에 그대로 저장된다.** `HARBOR_USER` 가 없으면 계정은 admin 이다. 그러면 `istio-system` secret 을 읽을 수 있는 주체는 누구나 Harbor admin 권한(모든 프로젝트 push·삭제, 계정 관리)을 얻는다. 경고는 설치 로그에만 남고 secret 은 계속 남는다.
+    - 운영에서는 `uipath` 프로젝트 pull 권한만 있는 robot 계정을 `HARBOR_PULL_USER` 로 준다.
+    - 이미 admin 으로 만들었으면 robot 계정으로 `install.sh` 를 다시 실행한다. secret 은 `kubectl apply` 로 바뀐다. 확인: `kubectl -n istio-system get secret uipathpullsecret -o jsonpath='{.data.\.dockerconfigjson}' | base64 -d | grep -o '"auth":"[^"]*"' | cut -d'"' -f4 | base64 -d | cut -d: -f1`(계정 이름만 출력, jq 불필요).
   - `istio-configure.sh` 도 사전 확인(Harbor API, `crictl pull`, `helm pull`)에 같은 자격증명이 필요하다. 아래 예의 `./install.sh` 를 `./istio-configure.sh` 로 바꿔 실행한다.
   - helm 은 임시 `--registry-config` 파일에만 로그인하고 끝나면 지운다.
   - 비밀번호를 프로세스 인자(`ps` 에 보인다)로 넘기지 않는다. Harbor API 는 `curl -K -`(stdin 설정), `crictl pull` 은 환경변수 `CRICTL_CREDS`, helm 은 `--password-stdin` 이다. pull secret 은 dockerconfigjson(auth 만)을 셸 안에서 만들어 `kubectl apply -f -` 로 넣는다.
@@ -272,6 +275,7 @@ hydrate 가 Istio 이미지 2개, 차트 3개, istio-configure 차트, WASM·cur
 - **Harbor 에서 받아 설치하는 경로(`--source harbor`)는 실기로 검증했다**(2026-11-09, as2510-vanilla 3노드, 기존 Harbor `harbor.myrobots.co.kr`, private 프로젝트 `uipath`, Harbor 2.15.2).
   - 확인한 것: Harbor API 조회(자격증명), `crictl pull`(3노드), `helm registry login --registry-config` + `helm pull`(CA 파일 없이 OS 신뢰 저장소), 차트 대조(4개 모두 재패키징, 내용 = 핀), pull secret, imageID 판정.
   - 8개 아티팩트는 이미 Harbor 에 있어 push 하지 않았다.
+  - **이 결과는 이전 Istio 잔여물을 손으로 정리한 뒤에 나왔다.** 이 클러스터에는 릴리스 `base` 가 남긴 CRD 15개와, 없는 istiod 를 가리키는 `failurePolicy: Fail` webhook 2개가 있었다. 설치 전에 CRD 15개의 소유 annotation 을 `base` → `istio-base` 로 바꾸고 webhook 2개를 지웠다(12.1절). `install.sh` 는 이 정리를 하지 않고, 사전 확인도 이 상태를 찾지 않는다.
 - **실제 Harbor 등록(hydrate 실행, push)은 미검증이다.** 검증한 Harbor 는 사용자가 이전에(2026-11-06) 채운 것이다. 어떤 도구로 채웠는지는 확인하지 못했다. 30-harbor 는 설치하지 않았다(사용자 결정).
 - `HARBOR_CA` 파일을 쓰는 경로(`/etc/containerd/certs.d/<host>/hosts.toml` 요구, `--cacert`/`--ca-file`)는 실기로 실행되지 않았다(as2510-vanilla 에는 certs.d 가 없다). `bash -n`, `shellcheck`, `--dry-run` 으로만 확인했다.
 
@@ -296,7 +300,7 @@ sudo ./install.sh --check-only            # 판정만 (40-haproxy 재실행 뒤 
 | `--source harbor` | 기본값. 차트와 이미지를 hydrate 된 Harbor 에서 받는다(4절) |
 | `--source local` | 단일 노드 검증 전용. 차트는 번들 `charts/`, 이미지는 검증용 묶음을 `ctr -n k8s.io images import` 로 넣는다 |
 | `--check-only` | 판정만 한다. 출처는 배포된 istiod 이미지 접두사로 판별한다(`--source` 를 주면 그 값). TLS 원본 파일 없이 secret 으로 판정한다 |
-| `--uninstall` | 제거한다. `custom-istio-configure` 가 있으면 멈추고 `istio-configure.sh --uninstall` 을 먼저 하라고 알린다 |
+| `--uninstall` | 제거한다. `custom-istio-configure` 가 있으면 멈추고 `istio-configure.sh --uninstall` 을 먼저 하라고 알린다. Istio CRD 는 차트의 `helm.sh/resource-policy: keep` 때문에 남는다(12절) |
 | `--dry-run` | root·클러스터·레지스트리 없이 렌더링한 이미지, NodePort, 실행할 명령(Harbor API URL, `crictl pull`, `helm pull`)만 출력한다 |
 
 `istio-configure.sh` 도 같은 옵션(`--source harbor|local`, `--check-only`, `--uninstall`, `--dry-run`)을 받는다.
@@ -346,6 +350,7 @@ ingressgateway 에는 `imagePullPolicy: IfNotPresent` 도 넣는다(charles-weed
 - gateway 차트는 컨테이너 이미지를 태그 없는 `image: auto`(주입 자리표시)로 두고 `imagePullPolicy` 기본값이 `""` 다. 그래서 Kubernetes 가 태그 없는 이미지의 기본값 `Always` 를 채운다(https://kubernetes.io/docs/concepts/containers/images/#imagepullpolicy-defaulting).
 - Deployment 에 들어간 이 값이 주입 템플릿의 `global.imagePullPolicy=IfNotPresent` 보다 우선한다. 실측에서 proxyv2 를 containerd 에 미리 넣었는데도 gateway 파드가 뜰 때마다 레지스트리에서 다시 받았다.
 - 그대로 두면 Harbor 가 내려갔을 때, 또는 `--source local` 에어갭에서 gateway 가 뜨지 못한다.
+- 이 수정으로 레지스트리 없이 gateway 가 뜨는지는 확인하지 못했다(11절). as2510-vanilla 에서 Deployment·파드 값은 `IfNotPresent` 였지만, 노드별 첫 gateway 파드는 이미지가 있는데도 Harbor 에서 다시 받았다(원인 미확인). charles-weed `--source local` 경로는 수정 뒤 다시 실행하지 못했다.
 - 이 값은 gateway Deployment 에만 쓰인다. 사이드카(proxyv2 주입)는 istiod 의 `global.imagePullPolicy` 를 따르고 바꾸지 않았다.
 - `build-bundle.sh` 가 렌더링한 gateway Deployment 에 이 값이 있는지 확인한다.
 
@@ -554,7 +559,8 @@ charles-weed(2 vCPU, 메모리 3,832MiB, swap 없음) 단일 노드 기준 reque
 | `verify-urls.sh` Istio 절 | 16/16 통과 (2026-11-07) |
 | 단일 노드 실기 설치(`--source local`) + 판정 | 완료 (2026-11-08, charles-weed 단일 노드, Ubuntu 24.04). `install.sh` 23/0, HAProxy 경유 포함 `--check-only` 26/0. 그 뒤 VM 연결이 끊겨 local 경로의 재실행 멱등성은 보지 못했다 |
 | istio-configure 실기(`--source local`) | 완료 (2026-11-08, charles-weed). 첫 판정 12/1(Wasm 판정 결함, 고침) → `--check-only` 13/0 |
-| **Harbor 경로(`--source harbor`) 실기 설치 + 판정** | 완료 (2026-11-09, as2510-vanilla 3노드, k8s 1.36.4, 기존 Harbor). `install.sh` 27/0(HAProxy 경유 포함), `istio-configure.sh` 14/0 |
+| **Harbor 경로(`--source harbor`) 실기 설치 + 판정** | 완료 (2026-11-09, as2510-vanilla 3노드, k8s 1.36.4, 기존 Harbor). `install.sh` 27/0(HAProxy 경유 포함), `istio-configure.sh` 14/0. 이전 Istio 잔여물(CRD 15개 소유 annotation, webhook 2개)을 손으로 정리한 뒤의 결과다(4.6절, 12.1절) |
+| 다른 릴리스가 남긴 Istio CRD·webhook | `install.sh` 는 정리하지 않고 사전 확인도 찾지 않는다. as2510-vanilla 에서는 12.1절 절차를 손으로 했다 |
 | 버전·이미지 | `pilot-discovery`/`pilot-agent version -s` = `1.30.3`. 이미지 `<HARBOR>/uipath/istio/{pilot,proxyv2}:1.30.3-20260730_echo`, 다이제스트는 핀과 같다(`ba73c276…`, `9545f8dd…`) |
 | HAProxy 경유 80/443/15021 | 완료 (charles-weed, as2510-vanilla). 443 은 사내 CA 로 검증해 200 `istio-smoke-ok` |
 | 재실행 멱등성 | 완료 (as2510-vanilla). 두 번째 `install.sh`·`istio-configure.sh` 뒤 기존 파드 UID·재시작 수가 같고, pod-template-hash 가 같다. 늘어난 gateway 파드는 HPA 확장이다(12절) |
@@ -563,6 +569,8 @@ charles-weed(2 vCPU, 메모리 3,832MiB, swap 없음) 단일 노드 기준 reque
 | CA 파일(`certs.d`) 경로 | **미실행** (4.6절) |
 | AS 라우팅(AS 설치 뒤) | **미검증**. Wasm 필터 적재와 smoke 응답까지만 봤다 |
 | 에어갭(`airgap-on.sh`) | **미실시**. 두 환경 모두 인터넷에 연결된 상태였다 |
+| Harbor 중단·에어갭에서 gateway 기동(`imagePullPolicy: IfNotPresent`, 5.2절) | **미검증**. as2510-vanilla 에서 노드별 첫 gateway 파드는 `IfNotPresent` 인데도 Harbor 에서 다시 받았다(원인 미확인). 같은 노드의 다음 파드들은 `already present on machine` 이었다. charles-weed `--source local` 경로는 수정 뒤 다시 실행하지 못했다 |
+| `--uninstall` | **미실행**. CRD 가 남는다는 것은 핀 base 차트를 `helm template` 으로 렌더링해 확인했다(CRD 15개 모두 `helm.sh/resource-policy: keep`) |
 
 ---
 
@@ -582,7 +590,47 @@ charles-weed(2 vCPU, 메모리 3,832MiB, swap 없음) 단일 노드 기준 reque
 | HAProxy 백엔드가 DOWN (gateway 는 Available) | 40-haproxy 를 Istio 설치 전 값으로 띄웠고 NodePort 가 다르다 | 40-haproxy `install.sh` 를 다시 실행한다. `kubectl -n istio-system get svc istio-ingressgateway` 의 NodePort 와 `curl -s 'http://127.0.0.1:8404/;csv'` 를 비교한다 |
 | `pilot-discovery version` 판정 실패 | 다른 태그의 이미지로 떠 있다 | `kubectl -n istio-system get deploy istiod -o jsonpath='{.spec.template.spec.containers[0].image}'` 를 `<hub>/pilot:<ISTIO_TAG>` 와 비교한다 |
 | Wasm 필터 적재 판정 실패 | plugin-http 가 Ready 가 아니거나 hook Job 이 url 을 바꾸지 못했다 | `kubectl -n istio-system get pods,jobs`, `kubectl -n istio-system logs job/update-wasm-plugin-version`, gateway 로그의 `wasm` 줄을 본다. 고친 뒤 `istio-configure.sh` 를 다시 실행한다 |
-| `--uninstall` 이 `custom-istio-configure 릴리스가 있다` 로 멈춘다 | istio-configure 를 먼저 지워야 한다 | `sudo ./istio-configure.sh --uninstall` 후 다시 실행한다. `istio-base` 를 지우면 Istio CRD 와 그 리소스가 함께 지워진다 |
+| `helm upgrade --install istio-base` 가 `... exists and cannot be imported into the current release: invalid ownership metadata; annotation validation error: key "meta.helm.sh/release-name" must equal "istio-base": current value is "base"` 로 멈춘다 | 다른 릴리스 이름(예: `base`)으로 Istio 를 설치했다가 지운 클러스터다. base 차트의 CRD 는 `helm.sh/resource-policy: keep` 이라 uninstall 뒤에도 남고, 소유 annotation 은 이전 릴리스를 가리킨다. Helm 은 소유 annotation 이 다른 기존 리소스를 넘겨받지 않는다 | CRD 를 지우지 않고(지우면 그 CRD 의 리소스도 모두 지워진다) 소유 annotation 을 `istio-base` / `istio-system` 으로 바꾼다(12.1절). Helm 3.2 부터 annotation·label 이 맞는 기존 리소스를 릴리스로 받아들인다(https://github.com/helm/helm/pull/7649) |
+| 파드 생성이나 Istio 리소스 생성이 `failed calling webhook "...istio.io": ... service "istiod" not found` 류로 거부된다 | 이전 istiod 가 남긴 `failurePolicy: Fail` webhook(`istio-sidecar-injector`, `istio-validator-istio-system`)이 없는 `istio-system/istiod` 를 가리킨다. 사이드카 주입 대상 파드와 Istio 리소스가 거부된다 | webhook 의 대상 Service 가 없는지 확인하고, YAML 을 백업한 뒤 istiod 를 설치하기 바로 전에 지운다. istiod 차트가 같은 이름으로 다시 만든다(12.1절) |
+| `--uninstall` 이 `custom-istio-configure 릴리스가 있다` 로 멈춘다 | istio-configure 를 먼저 지워야 한다 | `sudo ./istio-configure.sh --uninstall` 후 다시 실행한다 |
+| `--uninstall` 뒤에도 Istio CRD 와 Gateway/VirtualService 등이 남는다 | 핀 base 차트의 CRD 15개가 모두 `helm.sh/resource-policy: keep` 이다(`helm template` 으로 확인). helm 은 keep 리소스를 지우지 않는다 | 의도한 동작이다. 모두 지우려면 `kubectl get crd -o name \| grep '\.istio\.io$' \| xargs -r kubectl delete`(그 CRD 의 리소스도 모두 지워진다). 같은 클러스터에 다시 설치하면 `istio-base` 가 남은 CRD 를 그대로 넘겨받는다 |
+
+### 12.1 이전 Istio 잔여물 정리 (다른 릴리스 이름으로 설치했던 클러스터)
+
+as2510-vanilla(2026-11-09)에서 손으로 한 절차다. `install.sh` 는 이 정리를 하지 않는다. 위 표의 두 오류 문구는 Helm·Kubernetes 의 동작에서 옮긴 것이다. as2510-vanilla 에서는 설치 전에 정리해서 이 오류를 직접 보지는 않았다.
+
+1. 이전 Istio 릴리스가 남아 있지 않은지 본다. `helm list -A` 에 Istio 릴리스(예: `base`, `istiod`)가 있으면 다른 Istio 가 아직 설치된 것이다. 이 절차를 쓰지 말고 그 Istio 를 먼저 지운다.
+2. 남은 CRD 의 소유 릴리스를 본다.
+   ```bash
+   kubectl get crd -o custom-columns='NAME:.metadata.name,RELEASE:.metadata.annotations.meta\.helm\.sh/release-name,RELEASE_NS:.metadata.annotations.meta\.helm\.sh/release-namespace,POLICY:.metadata.annotations.helm\.sh/resource-policy' \
+     | awk 'NR==1 || $1 ~ /\.istio\.io$/'
+   ```
+3. `RELEASE` 가 `istio-base` 가 아니면 넘겨받게 바꾼다. CRD 는 지우지 않는다. as2510-vanilla 에서는 15개 모두 `base` → `istio-base` 였다.
+   ```bash
+   for c in $(kubectl get crd -o name | grep '\.istio\.io$'); do
+     kubectl annotate --overwrite "$c" meta.helm.sh/release-name=istio-base meta.helm.sh/release-namespace=istio-system
+     kubectl label --overwrite "$c" app.kubernetes.io/managed-by=Helm
+   done
+   ```
+4. webhook 이 없는 istiod 를 가리키는지 본다.
+   ```bash
+   kubectl get mutatingwebhookconfigurations,validatingwebhookconfigurations \
+     -o custom-columns='NAME:.metadata.name,SVC:.webhooks[*].clientConfig.service.name,SVC_NS:.webhooks[*].clientConfig.service.namespace,POLICY:.webhooks[*].failurePolicy' \
+     | grep -iE '^NAME|istio'
+   kubectl -n istio-system get svc istiod          # NotFound 면 위 webhook 은 대상이 없다
+   ```
+5. 대상이 없고 `POLICY` 가 `Fail` 이면 YAML 을 백업하고 istiod 를 설치하기 바로 전에 지운다. 지운 뒤 설치할 때까지의 빈 시간을 줄이려는 것이다. istiod 차트가 같은 이름으로 다시 만든다(as2510-vanilla: 04:35:39Z 에 지움, istiod 설치 05:07:48Z 에 다시 생김).
+   ```bash
+   kubectl get mutatingwebhookconfiguration istio-sidecar-injector -o yaml > istio-sidecar-injector.bak.yaml
+   kubectl get validatingwebhookconfiguration istio-validator-istio-system -o yaml > istio-validator-istio-system.bak.yaml
+   kubectl delete mutatingwebhookconfiguration istio-sidecar-injector
+   kubectl delete validatingwebhookconfiguration istio-validator-istio-system
+   # 바로 이어서 install.sh 를 실행한다(5절, private 프로젝트면 4.5절 자격증명)
+   ```
+6. 다른 클러스터 리소스(ClusterRole·ClusterRoleBinding 등)도 Helm 이 같은 소유권 검사를 한다. as2510-vanilla 의 ClusterRole·ClusterRoleBinding 6개는 이미 `istiod` / `istio-system` 소유라 그대로 넘겨받았다. 소유 릴리스가 `istiod`·`istio-ingressgateway` 와 다르면 helm 오류에 나온 리소스를 3번처럼 바꾼다.
+
+- base 차트의 `istiod-default-validator`(ValidatingWebhookConfiguration)는 `failurePolicy: Ignore` 라 대상이 없어도 요청을 막지 않는다. 다만 다른 릴리스가 남겼다면 같은 소유권 오류가 날 수 있다.
+- `install.sh` 의 사전 확인은 NodePort 충돌은 찾지만, 다른 릴리스가 소유한 Istio CRD 나 대상 없는 webhook 은 찾지 않는다. 이 상태에서 실행하면 namespace·TLS secret·pull secret 을 만든 뒤 helm 단계에서 멈춘다.
 
 ---
 

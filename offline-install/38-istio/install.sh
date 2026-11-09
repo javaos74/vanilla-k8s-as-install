@@ -287,7 +287,9 @@ do_uninstall() {
     SMOKE_APPLIED=1; smoke_delete
     helm -n "$NS" uninstall "$GW"   2>/dev/null || warn "${GW} 릴리스가 없다"
     helm -n "$NS" uninstall istiod  2>/dev/null || warn "istiod 릴리스가 없다"
-    warn "istio-base 를 지우면 Istio CRD 가 함께 지워진다(클러스터의 Gateway/VirtualService 등도 사라진다)."
+    # 핀 base 차트의 CRD 15개는 모두 helm.sh/resource-policy: keep 이라 helm uninstall 뒤에도 남는다
+    # (helm template 으로 확인, README 12절).
+    warn "Istio CRD 는 남는다(차트의 helm.sh/resource-policy: keep). Gateway/VirtualService 등 그 리소스도 남는다. 지우려면: kubectl get crd -o name | grep '\.istio\.io\$' | xargs -r kubectl delete"
     helm -n "$NS" uninstall istio-base 2>/dev/null || warn "istio-base 릴리스가 없다"
     kubectl -n "$NS" delete secret "$ISTIO_TLS_SECRET" "$ISTIO_PULL_SECRET" --ignore-not-found >/dev/null 2>&1 || true
     ok "제거 완료. 네임스페이스 ${NS} 는 남겼다(kubectl delete ns ${NS} 로 지울 수 있다)."

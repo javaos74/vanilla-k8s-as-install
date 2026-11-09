@@ -657,7 +657,7 @@ UiPath 오프라인 번들(`as-cmk-<버전>.tar.gz`)과 `hydrate-registry.sh` �
 - 아래 값은 2026-11-07 에 2.2510.4 파일과 `hydrate-registry.sh` 본문으로 확인했습니다.
 
 > [!WARNING]
-> **이 절은 실제 실행으로 검증하지 않았습니다(미검증).** 이 저장소의 검증 환경에는 Harbor 가 없습니다. 명령과 주의점은 UiPath 문서와 `hydrate-registry.sh` 본문을 읽어 정리한 것입니다.
+> **이 절은 실제 실행으로 검증하지 않았습니다(미검증).** `hydrate-registry.sh` 는 어느 검증 환경에서도 실행하지 않았습니다. 명령과 주의점은 UiPath 문서와 `hydrate-registry.sh` 본문을 읽어 정리한 것입니다. as2510-vanilla 의 기존 Harbor(2026-11-06 에 채워짐, 채운 도구는 미확인)에 5.2.6절의 Istio 관련 8개가 있는 것과, 그 Harbor 에서 `38-istio` 를 설치하는 것은 확인했습니다(5.3.7절).
 
 #### 5.2.1 인터넷 호스트에서 받기
 
@@ -874,10 +874,10 @@ done                                                   # 모두 200 이어야 �
 ./istio-configure.sh --dry-run --source harbor
 ```
 
-`install.sh` 와 `istio-configure.sh` 는 설치 전에 같은 확인을 스스로 합니다. Harbor 이름 해석, CA, containerd `hosts.toml`, `/api/v2.0/ping`, 프로젝트 public 여부, 이미지 존재(Harbor API), `crictl pull`, 차트 `helm pull` + sha256 대조 순서이고, 하나라도 실패하면 아무것도 바꾸지 않고 멈춥니다. Harbor 사본의 이미지 다이제스트는 원본과 다를 수 있어(5.2.5절 주의점 5) 이미지는 태그로 참조하고, 차트만 핀과 대조합니다. 차트 tgz sha256 이 다르면 번들 차트와 내용(`diff -r`)을 비교해 같을 때만 설치합니다(38-istio README 4.3절).
+`install.sh` 와 `istio-configure.sh` 는 설치 전에 같은 확인을 스스로 합니다. Harbor 이름 해석, CA(CA 파일이 있으면 containerd `hosts.toml` 도 요구, 없으면 OS 신뢰 저장소로 검증), `/api/v2.0/ping`, 프로젝트 public 여부, 이미지 존재(Harbor API), `crictl pull`, 차트 `helm pull` + sha256 대조 순서이고, 하나라도 실패하면 아무것도 바꾸지 않고 멈춥니다. Harbor 사본의 이미지 다이제스트는 원본과 다를 수 있어(5.2.5절 주의점 5) 이미지는 태그로 참조하고, 차트만 핀과 대조합니다. 차트 tgz sha256 이 다르면 번들 차트와 내용(`diff -r`)을 비교해 같을 때만 설치합니다(38-istio README 4.3절).
 
 > [!WARNING]
-> **실제 Harbor 경로는 미검증입니다.** `--source harbor` 의 Harbor 접근(`helm pull --ca-file`, `helm registry login`, `crictl pull`, Harbor API, pull secret)은 `bash -n`, `shellcheck`, `--dry-run` 으로만 확인했습니다.
+> **실제 Harbor 등록(hydrate 실행, push)은 미검증입니다.** `--source harbor` 설치 경로(Harbor API 조회, `crictl pull`, `helm registry login` + `helm pull`, 차트 대조, pull secret)는 as2510-vanilla 의 기존 Harbor(private 프로젝트, CA 는 OS 신뢰 저장소)에서 실기로 확인했습니다(5.3.7절). CA 파일을 쓰는 경로(`/etc/containerd/certs.d/<host>/hosts.toml` 요구, `--cacert`/`--ca-file`)는 실행되지 않았고 `bash -n`, `shellcheck`, `--dry-run` 으로만 확인했습니다.
 
 #### 5.3.3 Istio 설치
 
@@ -886,8 +886,12 @@ sudo ./install.sh                  # = --source harbor. istio-base → istiod �
 
 # TLS 원본이 /opt/pki/as 가 아니면(기본은 4.1절 deploy-certs.sh --local 이 둔 곳)
 # sudo ISTIO_TLS_CERT_DIR=/path/to/as ./install.sh
-# uipath 프로젝트가 private 이면 pull 계정(robot 권장). istio-system 에 uipathpullsecret 을 만듭니다.
-# sudo HARBOR_PULL_USER='<robot 계정>' HARBOR_PULL_PASSWORD='<토큰>' ./install.sh
+# uipath 프로젝트가 private 이면 pull 계정(robot 권장)을 줍니다. istio-system 에 uipathpullsecret 을 만듭니다.
+# 비밀번호를 명령줄에 쓰면 프로세스 목록(ps)에 보이므로 stdin 으로 넘깁니다(38-istio README 4.5절).
+# read -rs -p 'Harbor password: ' HARBOR_PULL_PASSWORD; echo
+# printf '%s\n' "$HARBOR_PULL_PASSWORD" | sudo bash -c \
+#   'IFS= read -r HARBOR_PULL_PASSWORD; export HARBOR_PULL_USER=<robot 계정> HARBOR_PULL_PASSWORD; exec ./install.sh'
+# unset HARBOR_PULL_PASSWORD
 ```
 
 - **TLS secret:** `istio-system/istio-ingressgateway-certs` 를 `/opt/pki/as/{fullchain.crt,tls.key,ca.crt}` 로 만듭니다(`tls.crt` = 서버 인증서 + 체인). 설치 전에 SAN(`AS_FQDN`, `*.AS_FQDN`), 키 짝, CA 검증을 확인하고 틀리면 멈춥니다.
@@ -902,6 +906,7 @@ sudo ./install.sh --check-only     # gateway 와 smoke 판정이 그대로인지
 ```
 
 - values 는 UiPath 문서 Option A 값에 `global.kubernetesDistribution: vanilla`, `global.cluster_type: exclusive` 를 넣은 것입니다(38-istio README 7절).
+- `uipath` 프로젝트가 private 이면 이 스크립트에도 5.3.3절과 같은 방법으로 `HARBOR_PULL_USER`/`HARBOR_PULL_PASSWORD` 를 줍니다. 사전 확인(Harbor API, `crictl pull`, `helm pull`)에 씁니다. pull secret 은 `install.sh` 가 만든 것을 씁니다.
 - **`AS_FQDN` 을 바꾸면 다시 실행합니다**(WasmPlugin `pluginConfig.fqdn`). 인증서도 바꿨으면 `install.sh` 를 먼저 다시 실행합니다(TLS secret).
 - 이 스크립트를 썼으면 `input.json` 의 `exclude_components` 에 `istio-configure` 를 둡니다(5.1절).
 

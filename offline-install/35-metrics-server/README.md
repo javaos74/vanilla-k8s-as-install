@@ -16,9 +16,10 @@ Rocky Linux 9.8 에어갭 노드에서 Harbor push → 배포 → `kubectl top` 
 | 다이제스트 | `sha256:6f27f99a50ae8880846a24528a632a9419e0220ba93ad0519fff88ae7c43df8a` (linux/amd64 단일) |
 | Harbor 주소 | `<HARBOR_HOSTNAME>/uipath/rancher/hardened-k8s-metrics-server:v0.9.0-build20260722` |
 
-Harbor 에서는 UiPath AS 이미지를 seed 하는 **`uipath` 프로젝트**에 `registry.uipath.com` 의 경로를
+Harbor 에서는 UiPath AS 이미지를 올리는 **`uipath` 프로젝트**에 `registry.uipath.com` 의 경로를
 그대로 둔다. `input.json` 의 `registries.docker.url` 이 `<harbor>/uipath` 이고
-`uipathctl registry seed` 도 같은 규칙으로 올리므로, 레지스트리 경로가 하나로 맞춰진다.
+AS 오프라인 번들의 hydrate(`hydrate-registry.sh`, 상위 README 5.2절)도 같은 규칙으로 올리므로,
+레지스트리 경로가 하나로 맞춰진다.
 프로젝트는 `METRICS_SERVER_HARBOR_PROJECT` 로 바꿀 수 있다.
 
 `registry.uipath.com` 에는 `metrics-server/metrics-server` 경로가 없고 Rancher 하드닝

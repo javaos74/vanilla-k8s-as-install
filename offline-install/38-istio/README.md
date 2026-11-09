@@ -144,7 +144,7 @@ istio-1.30.3/                         (tar.gz 약 190KB)
 
 - 이미지는 넣지 않는다. 운영에서는 AS hydrate 가 Harbor 에 올린 것을 받는다(4절). 넣으면 같은 이미지를 두 번 옮기게 된다.
 - 차트는 넣는다(합계 약 146KB). `--source local` 설치, `--dry-run` 렌더링에 쓴다. registry.uipath.com 원본과 같은 바이트다(sha256 핀). `--source harbor` 에서 Harbor 차트의 tgz sha256 이 핀과 다르면 이 차트와 내용을 비교한다(4.3절).
-- `gateway-values.yaml.tmpl` 의 NodePort 는 `install.sh` 가 실행 때 `ISTIO_NODEPORT_*` 로 채운다. 타깃에서 `site.env` 로 NodePort 를 바꿔도 `40-haproxy`(실행 때 같은 변수를 읽는다)와 어긋나지 않게 하려는 것이다.
+- `gateway-values.yaml.tmpl` 의 NodePort 는 `install.sh` 가 실행 때 `ISTIO_NODEPORT_*` 로 채운다. `site.env` 로 NodePort 를 바꿔도(두 번들을 같은 `site.env` 로 다시 빌드, 8.1절) `40-haproxy`(실행 때 같은 변수를 읽는다)와 어긋나지 않게 하려는 것이다.
 
 ### 3.2 검증용 이미지 묶음 `istio-local-images-1.30.3` (단일 노드 전용)
 
@@ -182,7 +182,7 @@ ISTIO_LOCAL_IMAGES=1 ./00-common/build-in-container.sh 24.04 38-istio  # + 검�
   - istiod Deployment 이미지가 `registry.uipath.com/istio/pilot:<ISTIO_TAG>` 하나뿐이다.
   - 주입 values 에 `"hub"`, `"tag"`, `"image": "proxyv2"` 가 있다(사이드카·게이트웨이 프록시 이미지).
   - UiPath values-air 값(`holdApplicationUntilProxyStarts`, `ENABLE_NATIVE_SIDECARS`, `system-cluster-critical`)이 반영됐다.
-  - gateway Service 가 NodePort 이고 nodePort 3개, selector `istio: ingressgateway`, 이미지 `auto`(주입)다.
+  - gateway Service 가 NodePort 이고 nodePort 3개, selector `istio: ingressgateway`, 이미지 `auto`(주입)다. gateway Deployment 에 `imagePullPolicy: IfNotPresent` 가 있다(5.2절).
   - istio-configure 이미지 집합이 정확히 `{UIPATH_WASM_IMAGE, UIPATH_ISTIO_CURL_IMAGE}` 이고 pluginConfig 에 `cluster_type: exclusive`, `k8s_distribution: vanilla` 가 있다.
 
 ---
@@ -254,6 +254,7 @@ hydrate 가 Istio 이미지 2개, 차트 3개, istio-configure 차트, WASM·cur
   1. `HARBOR_PULL_USER` / `HARBOR_PULL_PASSWORD` (Harbor robot 계정 권장)
   2. 35-metrics-server 와 같은 순서: `HARBOR_USER` / `HARBOR_PASSWORD` → `site.env` 의 `HARBOR_ADMIN_PASSWORD`(admin) → `/opt/harbor/.harbor-credentials`. 이때는 robot 계정을 쓰라는 경고를 낸다.
   - `install.sh` 가 `istio-system` 에 `uipathpullsecret`(`ISTIO_PULL_SECRET`)을 만들고 istiod·gateway 에 붙인다. `istio-configure.sh` 는 그 secret 이 있을 때만 values 에 넣는다.
+  - `istio-configure.sh` 도 사전 확인(Harbor API, `crictl pull`, `helm pull`)에 같은 자격증명이 필요하다. 아래 예의 `./install.sh` 를 `./istio-configure.sh` 로 바꿔 실행한다.
   - helm 은 임시 `--registry-config` 파일에만 로그인하고 끝나면 지운다.
   - 비밀번호를 프로세스 인자(`ps` 에 보인다)로 넘기지 않는다. Harbor API 는 `curl -K -`(stdin 설정), `crictl pull` 은 환경변수 `CRICTL_CREDS`, helm 은 `--password-stdin` 이다. pull secret 은 dockerconfigjson(auth 만)을 셸 안에서 만들어 `kubectl apply -f -` 로 넣는다.
   - `sudo` 로 실행할 때 비밀번호를 명령줄에 쓰지 않으려면 stdin 으로 읽어 넘긴다. 예:
@@ -547,7 +548,7 @@ charles-weed(2 vCPU, 메모리 3,832MiB, swap 없음) 단일 노드 기준 reque
 
 | 항목 | 상태 |
 |---|---|
-| `bash -n`, `shellcheck` | 완료 (2026-11-07) |
+| `bash -n`, `shellcheck` | 완료 (2026-11-09, 최종 HEAD). 38-istio 는 SC1091 note 만, 바꾼 기존 스크립트는 기준선과 같다 |
 | 번들 빌드(`ISTIO_LOCAL_IMAGES=1 build-in-container.sh 24.04 38-istio`) | 완료 (2026-11-07, charles-weed, Ubuntu 24.04). 차트 sha256 = 핀, 렌더링 단언 통과 |
 | `--dry-run --source harbor` / `--source local` (`install.sh`, `istio-configure.sh`) | 완료 (2026-11-07, charles-weed, root·클러스터 없이) |
 | `verify-urls.sh` Istio 절 | 16/16 통과 (2026-11-07) |

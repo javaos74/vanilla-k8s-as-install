@@ -260,12 +260,14 @@ hydrate 가 Istio 이미지 2개, 차트 3개, istio-configure 차트, WASM·cur
   - `istio-configure.sh` 도 사전 확인(Harbor API, `crictl pull`, `helm pull`)에 같은 자격증명이 필요하다. 아래 예의 `./install.sh` 를 `./istio-configure.sh` 로 바꿔 실행한다.
   - helm 은 임시 `--registry-config` 파일에만 로그인하고 끝나면 지운다.
   - 비밀번호를 프로세스 인자(`ps` 에 보인다)로 넘기지 않는다. Harbor API 는 `curl -K -`(stdin 설정), `crictl pull` 은 환경변수 `CRICTL_CREDS`, helm 은 `--password-stdin` 이다. pull secret 은 dockerconfigjson(auth 만)을 셸 안에서 만들어 `kubectl apply -f -` 로 넣는다.
-  - `sudo` 로 실행할 때 비밀번호를 명령줄에 쓰지 않으려면 stdin 으로 읽어 넘긴다. 예:
+  - `sudo` 로 실행할 때 비밀번호를 명령줄에 쓰지 않으려면 stdin 으로 읽어 넘긴다. 계정 이름도 같이 stdin 으로 넘긴다.
+    - robot 계정 이름(`robot$<프로젝트>+<이름>`)을 `bash -c '...'` 문자열 안에 쓰면 안쪽 셸이 `$<프로젝트>` 를 빈 변수로 확장해 `robot+<이름>` 으로 로그인한다.
+    - stdin 으로 넘기면 따옴표나 sudoers 의 환경변수 정책(env_reset)과 상관없이 값이 그대로 전달되고, 계정 이름도 프로세스 인자에 남지 않는다. 예:
     ```bash
-    read -rs -p 'Harbor password: ' HARBOR_PULL_PASSWORD; echo
-    printf '%s\n' "$HARBOR_PULL_PASSWORD" | sudo bash -c \
-      'IFS= read -r HARBOR_PULL_PASSWORD; export HARBOR_PULL_USER=<사용자> HARBOR_PULL_PASSWORD; exec ./install.sh'
-    unset HARBOR_PULL_PASSWORD
+    read -r -p 'Harbor user: ' HARBOR_PULL_USER; read -rs -p 'Harbor password: ' HARBOR_PULL_PASSWORD; echo
+    printf '%s\n' "$HARBOR_PULL_USER" "$HARBOR_PULL_PASSWORD" | sudo bash -c \
+      'IFS= read -r HARBOR_PULL_USER; IFS= read -r HARBOR_PULL_PASSWORD; export HARBOR_PULL_USER HARBOR_PULL_PASSWORD; exec ./install.sh'
+    unset HARBOR_PULL_USER HARBOR_PULL_PASSWORD
     ```
 - CA 검증을 끄지 않는다. `--insecure-skip-tls-verify`, `--plain-http`, `insecure-registries` 를 쓰지 않는다.
 - 파드는 어느 노드에도 뜰 수 있으므로 **모든 노드**가 Harbor 이름을 해석하고 CA 를 신뢰해야 한다(`05-certs/deploy-certs.sh --nodes ...`). 사이드카 proxyv2 는 AS 파드가 뜨는 모든 노드에서 받는다.

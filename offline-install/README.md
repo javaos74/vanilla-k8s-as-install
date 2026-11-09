@@ -722,6 +722,7 @@ cd offline-install/05-certs && sudo ./deploy-certs.sh --local
 #    프로세스 인자(ps)에 남습니다. 프롬프트로 읽어 curl 설정을 stdin(-K -)으로 넘깁니다.
 #    (38-istio istio-lib.sh 의 hcurl_auth 와 같은 방식. printf 는 셸 내장이라 인자에 남지 않습니다)
 #    5.2.6절·5.3.2절의 확인 명령도 이 hapi 를 씁니다. 새 셸이면 아래 H= 부터 hapi 정의까지 다시 실행합니다.
+#    HU/HP 는 5.2.6절 확인 끝에서 지우고, 5.3.2절 블록에서 다시 묻습니다.
 H=<HARBOR_HOSTNAME>; CA=/opt/pki/ca/ca.crt
 read -r -p 'Harbor 계정: ' HU; read -rs -p 'Harbor 비밀번호: ' HP; echo
 hapi() {   # curl 설정 문법에 맞게 \ 와 " 를 이스케이프합니다
@@ -872,7 +873,9 @@ tar xzf istio-1.30.3.tar.gz && cd istio-1.30.3
 | istio-configure | `oci://<HARBOR_HOSTNAME>/uipath/helm/istio-configure` `--version 2.2510.4` |
 
 ```bash
-# H, CA, HU/HP(프롬프트), hapi 는 5.2.3절 2) 에서 정의합니다(비밀번호를 명령줄에 쓰지 않습니다).
+# H, CA, hapi 는 5.2.3절 2) 에서 정의합니다. 새 셸이면 그 H=…; CA=… 줄과 hapi 정의를 먼저 실행합니다.
+# HU/HP 는 5.2.6절 끝에서 지웠으므로 여기서 다시 묻습니다(비밀번호를 명령줄에 쓰지 않습니다).
+read -r -p 'Harbor 계정: ' HU; read -rs -p 'Harbor 비밀번호: ' HP; echo
 # public 프로젝트면 hapi 대신 curl --cacert "$CA" 를 써도 됩니다.
 for a in istio%252Fpilot/artifacts/1.30.3-20260730_echo istio%252Fproxyv2/artifacts/1.30.3-20260730_echo \
          istio-wasm-plugin/artifacts/2.2510.4 curlimages%252Fcurl/artifacts/2026.05.11 \
@@ -902,10 +905,12 @@ sudo ./install.sh                  # = --source harbor. istio-base → istiod �
 # sudo ISTIO_TLS_CERT_DIR=/path/to/as ./install.sh
 # uipath 프로젝트가 private 이면 pull 계정(robot 권장)을 줍니다. istio-system 에 uipathpullsecret 을 만듭니다.
 # 비밀번호를 명령줄에 쓰면 프로세스 목록(ps)에 보이므로 stdin 으로 넘깁니다(38-istio README 4.5절).
-# read -rs -p 'Harbor password: ' HARBOR_PULL_PASSWORD; echo
-# printf '%s\n' "$HARBOR_PULL_PASSWORD" | sudo bash -c \
-#   'IFS= read -r HARBOR_PULL_PASSWORD; export HARBOR_PULL_USER=<robot 계정> HARBOR_PULL_PASSWORD; exec ./install.sh'
-# unset HARBOR_PULL_PASSWORD
+# 계정 이름도 stdin 으로 넘깁니다. robot 계정 이름(robot$<프로젝트>+<이름>)을 bash -c '...' 안에 쓰면
+# 안쪽 셸이 $<프로젝트> 를 빈 값으로 확장해 robot+<이름> 으로 로그인합니다.
+# read -r -p 'Harbor user: ' HARBOR_PULL_USER; read -rs -p 'Harbor password: ' HARBOR_PULL_PASSWORD; echo
+# printf '%s\n' "$HARBOR_PULL_USER" "$HARBOR_PULL_PASSWORD" | sudo bash -c \
+#   'IFS= read -r HARBOR_PULL_USER; IFS= read -r HARBOR_PULL_PASSWORD; export HARBOR_PULL_USER HARBOR_PULL_PASSWORD; exec ./install.sh'
+# unset HARBOR_PULL_USER HARBOR_PULL_PASSWORD
 ```
 
 - **TLS secret:** `istio-system/istio-ingressgateway-certs` 를 `/opt/pki/as/{fullchain.crt,tls.key,ca.crt}` 로 만듭니다(`tls.crt` = 서버 인증서 + 체인). 설치 전에 SAN(`AS_FQDN`, `*.AS_FQDN`), 키 짝, CA 검증을 확인하고 틀리면 멈춥니다.

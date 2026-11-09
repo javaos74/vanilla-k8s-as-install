@@ -228,12 +228,14 @@ hydrate 가 Istio 이미지 2개, 차트 3개, istio-configure 차트, WASM·cur
 
 1. `site.env` 의 `HARBOR_HOSTNAME` 이 있고 이 노드에서 해석된다(`getent hosts`).
 2. Harbor CA 를 찾는다. 후보 순서는 35-metrics-server 와 같다: `/etc/docker/certs.d/<host>/ca.crt` → `/etc/containerd/certs.d/<host>/ca.crt` → `/opt/pki/ca/ca.crt`.
-3. `/etc/containerd/certs.d/<host>/hosts.toml` 이 있다(05-certs `deploy-certs.sh --local` 이 만든다).
-4. `https://<host>/api/v2.0/ping` 이 CA 검증을 통과해 `Pong` 을 돌려준다.
+3. CA 파일을 찾았으면 `/etc/containerd/certs.d/<host>/hosts.toml` 도 있어야 한다(05-certs `deploy-certs.sh --local` 이 만든다).
+   - CA 파일이 하나도 없으면 노드 OS 신뢰 저장소로 검증한다. 사내 CA 를 `update-ca-certificates` 로 OS 신뢰 저장소에만 넣은 클러스터가 있기 때문이다(as2510-vanilla 실측: certs.d·`/opt/pki` 없음, containerd `config_path = ''`).
+   - 이때 curl 과 helm 은 `--cacert`/`--ca-file` 없이 OS 신뢰 저장소를 쓴다. containerd 도 `config_path` 를 쓰지 않으면 같은 저장소로 검증한다. containerd 쪽은 7번 `crictl pull` 이 실제로 확인한다.
+4. `https://<host>/api/v2.0/ping` 이 CA 검증(CA 파일 또는 OS 신뢰 저장소)을 통과해 `Pong` 을 돌려준다.
 5. 익명 `GET /api/v2.0/projects/<project>` 로 public 여부를 본다. private 이면 자격증명으로 다시 읽는다.
 6. Harbor API(`/api/v2.0/projects/<p>/repositories/<repo, '/' 는 %252F>/artifacts/<태그>`)로 이미지가 있는지 본다.
 7. `crictl pull` 로 containerd(kubelet 경로)가 실제로 받는지 본다. 실패하면 파드가 `ImagePullBackOff` 가 되므로 설치 전에 멈춘다.
-8. `helm pull oci://… --ca-file <CA>` 로 차트를 받아 sha256 을 대조한다(4.3절).
+8. `helm pull oci://… [--ca-file <CA>]` 로 차트를 받아 sha256 을 대조한다(4.3절).
 
 ### 4.5 인증과 CA
 
@@ -243,6 +245,14 @@ hydrate 가 Istio 이미지 2개, 차트 3개, istio-configure 차트, WASM·cur
   2. 35-metrics-server 와 같은 순서: `HARBOR_USER` / `HARBOR_PASSWORD` → `site.env` 의 `HARBOR_ADMIN_PASSWORD`(admin) → `/opt/harbor/.harbor-credentials`. 이때는 robot 계정을 쓰라는 경고를 낸다.
   - `install.sh` 가 `istio-system` 에 `uipathpullsecret`(`ISTIO_PULL_SECRET`)을 만들고 istiod·gateway 에 붙인다. `istio-configure.sh` 는 그 secret 이 있을 때만 values 에 넣는다.
   - helm 은 임시 `--registry-config` 파일에만 로그인하고 끝나면 지운다.
+  - 비밀번호를 프로세스 인자(`ps` 에 보인다)로 넘기지 않는다. Harbor API 는 `curl -K -`(stdin 설정), `crictl pull` 은 환경변수 `CRICTL_CREDS`, helm 은 `--password-stdin` 이다. pull secret 은 dockerconfigjson(auth 만)을 셸 안에서 만들어 `kubectl apply -f -` 로 넣는다.
+  - `sudo` 로 실행할 때 비밀번호를 명령줄에 쓰지 않으려면 stdin 으로 읽어 넘긴다. 예:
+    ```bash
+    read -rs -p 'Harbor password: ' HARBOR_PULL_PASSWORD; echo
+    printf '%s\n' "$HARBOR_PULL_PASSWORD" | sudo bash -c \
+      'IFS= read -r HARBOR_PULL_PASSWORD; export HARBOR_PULL_USER=<사용자> HARBOR_PULL_PASSWORD; exec ./install.sh'
+    unset HARBOR_PULL_PASSWORD
+    ```
 - CA 검증을 끄지 않는다. `--insecure-skip-tls-verify`, `--plain-http`, `insecure-registries` 를 쓰지 않는다.
 - 파드는 어느 노드에도 뜰 수 있으므로 **모든 노드**가 Harbor 이름을 해석하고 CA 를 신뢰해야 한다(`05-certs/deploy-certs.sh --nodes ...`). 사이드카 proxyv2 는 AS 파드가 뜨는 모든 노드에서 받는다.
 

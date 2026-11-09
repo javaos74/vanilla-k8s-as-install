@@ -103,7 +103,7 @@ do_dry_run() {
             echo "    crictl pull ${HARBOR_REGISTRY}/${a}"
         done
         for c in "$ISTIO_BASE_CHART" "$ISTIO_ISTIOD_CHART" "$ISTIO_GATEWAY_CHART"; do
-            echo "    helm pull oci://${HARBOR_REGISTRY}/${c} --version ${ISTIO_CHART_VERSION} --ca-file <CA>  (sha256 대조)"
+            echo "    helm pull oci://${HARBOR_REGISTRY}/${c} --version ${ISTIO_CHART_VERSION} --ca-file ${HARBOR_CA:-<없음: OS 신뢰 저장소>}  (sha256 대조)"
         done
         echo "  private 프로젝트이면 Secret ${NS}/${ISTIO_PULL_SECRET} 를 만들고"
         echo "    --set global.imagePullSecrets[0]=${ISTIO_PULL_SECRET} / --set imagePullSecrets[0].name=${ISTIO_PULL_SECRET} 를 더한다."

@@ -162,6 +162,13 @@ images_in_containerd() {
 
 #--- harbor -------------------------------------------------------------
 # Harbor 접속에 쓸 CA. 35-metrics-server 와 같은 후보 순서다(05-certs deploy-certs 가 배치).
+#
+# 후보가 하나도 없으면 HARBOR_CA 는 비고, 노드 OS 신뢰 저장소로 검증한다.
+#   사내 CA 를 update-ca-certificates 로 OS 신뢰 저장소에만 넣은 클러스터가 있다
+#   (as2510-vanilla 실측 2026-11-09: certs.d·/opt/pki 없음, containerd config_path='').
+#   curl·helm 은 --cacert/--ca-file 이 없으면 OS 신뢰 저장소를 쓰고, containerd 는
+#   config_path 를 쓰지 않으면 같은 저장소로 검증한다. containerd 쪽은
+#   harbor_cri_pull 이 실제 pull 로 확인한다.
 HARBOR_CA=""
 for _c in "/etc/docker/certs.d/${HARBOR_HOST}/ca.crt" \
           "/etc/containerd/certs.d/${HARBOR_HOST}/ca.crt" \
@@ -169,9 +176,18 @@ for _c in "/etc/docker/certs.d/${HARBOR_HOST}/ca.crt" \
     [[ -n "$HARBOR_HOST" && -f "$_c" ]] && { HARBOR_CA="$_c"; break; }
 done
 unset _c
+HARBOR_CA_DESC="${HARBOR_CA:-OS 신뢰 저장소}"
 
 hcurl() {   # Harbor API 호출. CA 검증을 끄지 않는다.
     curl -fsS --max-time 15 ${HARBOR_CA:+--cacert "$HARBOR_CA"} "$@"
+}
+
+# 자격증명이 필요한 Harbor API 호출. -u 로 넘기면 비밀번호가 프로세스 인자(ps)에 보이므로
+# curl 설정을 stdin(-K -)으로 넘긴다. printf 는 셸 내장이라 인자에 남지 않는다.
+hcurl_auth() {
+    local u="${PULL_USER//\\/\\\\}" p="${PULL_PASS//\\/\\\\}"
+    u="${u//\"/\\\"}"; p="${p//\"/\\\"}"
+    printf 'user = "%s:%s"\n' "$u" "$p" | hcurl -K - "$@"
 }
 
 # pull 자격증명. private 프로젝트일 때만 쓴다.
@@ -204,13 +220,16 @@ harbor_preflight() {
     [[ -n "$HARBOR_HOST" ]] || die "site.env 에 HARBOR_HOSTNAME 이 없다"
     getent hosts "$HARBOR_HOST" >/dev/null \
         || die "${HARBOR_HOST} 를 해석하지 못한다. /etc/hosts 또는 사내 DNS 에 등록할 것(모든 노드)."
-    [[ -n "$HARBOR_CA" ]] \
-        || die "Harbor CA 를 찾지 못했다. 05-certs 의 deploy-certs.sh --local 을 먼저 실행할 것."
-    [[ -f "/etc/containerd/certs.d/${HARBOR_HOST}/hosts.toml" ]] \
-        || die "containerd 가 ${HARBOR_HOST} 를 신뢰하도록 설정되지 않았다(/etc/containerd/certs.d/${HARBOR_HOST}/hosts.toml 없음). 05-certs deploy-certs.sh --local."
+    if [[ -n "$HARBOR_CA" ]]; then
+        # 05-certs deploy-certs.sh 로 CA 파일을 배치한 경우다. containerd 도 같은 CA 를 써야 한다.
+        [[ -f "/etc/containerd/certs.d/${HARBOR_HOST}/hosts.toml" ]] \
+            || die "containerd 가 ${HARBOR_HOST} 를 신뢰하도록 설정되지 않았다(/etc/containerd/certs.d/${HARBOR_HOST}/hosts.toml 없음). 05-certs deploy-certs.sh --local."
+    else
+        log "Harbor CA 파일(/etc/docker/certs.d, /etc/containerd/certs.d, /opt/pki/ca)이 없다. OS 신뢰 저장소로 검증한다."
+    fi
     [[ "$(hcurl "https://${HARBOR_HOST}/api/v2.0/ping" 2>/dev/null)" == "Pong" ]] \
-        || die "https://${HARBOR_HOST} 에 닿지 않거나 인증서 검증에 실패했다(CA: ${HARBOR_CA})."
-    ok "Harbor 응답 + 인증서 검증 (CA: ${HARBOR_CA})"
+        || die "https://${HARBOR_HOST} 에 닿지 않거나 인증서 검증에 실패했다(CA: ${HARBOR_CA_DESC}). 05-certs deploy-certs.sh --local 로 사내 CA 를 신뢰시킬 것."
+    ok "Harbor 응답 + 인증서 검증 (CA: ${HARBOR_CA_DESC})"
 
     # 익명으로 프로젝트를 읽을 수 있으면 public 이다. 아니면 자격증명으로 다시 본다.
     local body
@@ -222,7 +241,7 @@ harbor_preflight() {
         HARBOR_PUBLIC="false"
         harbor_pull_creds \
             || die "프로젝트 ${PROJECT} 를 익명으로 읽을 수 없다(private 이거나 없음). HARBOR_PULL_USER/HARBOR_PULL_PASSWORD 를 줄 것."
-        hcurl -u "${PULL_USER}:${PULL_PASS}" "https://${HARBOR_HOST}/api/v2.0/projects/${PROJECT}" >/dev/null 2>&1 \
+        hcurl_auth "https://${HARBOR_HOST}/api/v2.0/projects/${PROJECT}" >/dev/null 2>&1 \
             || die "프로젝트 ${PROJECT} 를 읽지 못했다(사용자 ${PULL_USER}). README 5.2 의 hydrate 와 프로젝트 이름(ISTIO_HARBOR_PROJECT)을 확인할 것."
         ok "프로젝트 ${PROJECT} private — ${NS} 에 pull secret ${ISTIO_PULL_SECRET} 를 만든다 (사용자 ${PULL_USER})"
     fi
@@ -230,9 +249,9 @@ harbor_preflight() {
 
 # hydrate 결과 확인: 저장소:태그 가 Harbor 에 있는가.
 harbor_require_artifact() {   # $1=저장소 $2=태그
-    local auth=()
-    [[ "$HARBOR_PUBLIC" == "true" ]] || auth=(-u "${PULL_USER}:${PULL_PASS}")
-    hcurl "${auth[@]}" "$(harbor_artifact_url "$1" "$2")" >/dev/null 2>&1 \
+    local get=hcurl
+    [[ "$HARBOR_PUBLIC" == "true" ]] || get=hcurl_auth
+    "$get" "$(harbor_artifact_url "$1" "$2")" >/dev/null 2>&1 \
         || die "Harbor 에 ${PROJECT}/${1}:${2} 가 없다. README 5.2 의 hydrate(hydrate-registry.sh)를 먼저 실행할 것."
     ok "Harbor 에 있음: ${PROJECT}/${1}:${2}"
 }
@@ -240,10 +259,12 @@ harbor_require_artifact() {   # $1=저장소 $2=태그
 # 노드(containerd = kubelet 경로)에서 실제로 받아지는지 미리 본다(35 와 같은 방식).
 # 실패하면 파드가 ImagePullBackOff 가 되므로 설치 전에 멈춘다.
 harbor_cri_pull() {   # $1=이미지 ref
-    local creds=()
+    local creds=""
     require_cmds crictl
-    [[ "$HARBOR_PUBLIC" == "true" ]] || creds=(--creds "${PULL_USER}:${PULL_PASS}")
-    crictl --runtime-endpoint unix:///run/containerd/containerd.sock pull "${creds[@]}" "$1" >/dev/null 2>&1 \
+    # --creds 로 넘기면 비밀번호가 프로세스 인자(ps)에 보인다. crictl 이 읽는 환경변수
+    # CRICTL_CREDS 로 넘긴다(crictl pull --help: [$CRICTL_CREDS]).
+    [[ "$HARBOR_PUBLIC" == "true" ]] || creds="${PULL_USER}:${PULL_PASS}"
+    CRICTL_CREDS="$creds" crictl --runtime-endpoint unix:///run/containerd/containerd.sock pull "$1" >/dev/null 2>&1 \
         || die "containerd 가 ${1} 를 받지 못했다. 05-certs deploy-certs.sh --local 로 containerd 신뢰를 설정했는지, hydrate 가 끝났는지 확인할 것."
     ok "containerd 에서 Harbor pull 확인: ${1}"
 }
@@ -253,11 +274,14 @@ harbor_cri_pull() {   # $1=이미지 ref
 HELM_REGCFG=""
 harbor_chart_pull() {   # $1=OCI 경로(vendor/base) $2=버전 $3=sha256 핀
     local ref="$1" ver="$2" pin="$3" f got
-    local args=(--version "$ver" --ca-file "$HARBOR_CA")
+    # CA 파일이 없으면 --ca-file 을 빼서 OS 신뢰 저장소로 검증한다(HARBOR_CA 주석).
+    local ca=()
+    [[ -z "$HARBOR_CA" ]] || ca=(--ca-file "$HARBOR_CA")
+    local args=(--version "$ver" ${ca[@]+"${ca[@]}"})
     if [[ "$HARBOR_PUBLIC" != "true" ]]; then
         if [[ -z "$HELM_REGCFG" ]]; then
             mktemp_tracked; HELM_REGCFG="$TMP_LAST"
-            printf '%s' "$PULL_PASS" | helm registry login "$HARBOR_HOST" --ca-file "$HARBOR_CA" \
+            printf '%s' "$PULL_PASS" | helm registry login "$HARBOR_HOST" ${ca[@]+"${ca[@]}"} \
                 --registry-config "$HELM_REGCFG" --username "$PULL_USER" --password-stdin >/dev/null 2>&1 \
                 || die "helm registry login ${HARBOR_HOST} 실패 (사용자 ${PULL_USER})"
         fi
@@ -276,11 +300,24 @@ harbor_chart_pull() {   # $1=OCI 경로(vendor/base) $2=버전 $3=sha256 핀
 }
 
 # private 이면 pull secret 을 만든다(멱등: apply).
+# kubectl create secret docker-registry --docker-password 는 비밀번호를 프로세스 인자(ps)에
+# 남긴다. 그래서 dockerconfigjson 을 셸 안에서 만들어 stdin 으로 apply 한다.
+# auth(base64 "user:password")만 넣는다. containerd·kubelet 은 이것만 읽는다.
 harbor_pull_secret() {
     [[ "$HARBOR_PUBLIC" == "true" ]] && return 0
-    kubectl -n "$NS" create secret docker-registry "$ISTIO_PULL_SECRET" \
-        --docker-server="$HARBOR_HOST" --docker-username="$PULL_USER" --docker-password="$PULL_PASS" \
-        --dry-run=client -o yaml | kubectl apply -f - >/dev/null || die "pull secret 생성 실패"
+    local auth cfg
+    auth="$(printf '%s:%s' "$PULL_USER" "$PULL_PASS" | base64 -w0)"
+    cfg="$(printf '{"auths":{"%s":{"auth":"%s"}}}' "$HARBOR_HOST" "$auth" | base64 -w0)"
+    kubectl apply -f - >/dev/null <<EOF || die "pull secret 생성 실패"
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${ISTIO_PULL_SECRET}
+  namespace: ${NS}
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: ${cfg}
+EOF
     ok "pull secret ${NS}/${ISTIO_PULL_SECRET}"
 }
 

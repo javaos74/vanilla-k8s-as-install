@@ -846,8 +846,8 @@ AS 전체 hydrate(약 57GB) 없이 Istio 를 먼저 설치하거나, Harbor 를 
 - 필요한 명령은 `skopeo`, `helm`(3.8 이상), `curl` 등입니다. 하나라도 없으면 Harbor 에 접속하기 전에 멈춥니다. 10-k8s 노드에는 helm 이 있지만 skopeo 는 없을 수 있습니다. skopeo 는 OS 패키지로 설치하거나, skopeo 가 있고 Harbor 에 닿는 다른 호스트에서 실행합니다.
 - 결과 확인: 이미지는 Harbor API 의 태그와 다이제스트(이 도구가 올린 것은 `versions.env` 핀과 같습니다), 차트는 `helm pull --version` 후 tgz sha256 을 봅니다. 출력 끝이 `검증 결과: 통과 8 / 실패 0` 이어야 합니다. 확인 명령은 5.3.2절과 같습니다.
 
-> [!WARNING]
-> **`feed-istio-to-harbor.sh` 는 실제 Harbor 에서 아직 실행하지 않았습니다(미검증).** `bash -n`, `shellcheck`, 시험 번들의 `--dry-run` 과 사전 확인(Harbor `ping`·CA 검증까지)만 확인했습니다(38-istio README 4.6절).
+> [!NOTE]
+> **실기 결과 (2026-11-10, asw3 새 Harbor):** 첫 실행은 올림 2(pilot·proxyv2) / 건너뜀 6, 다시 실행하면 건너뜀 8 이었고, 두 번 모두 `통과 8 / 실패 0` 이었습니다. 새 Harbor 는 사용자가 UiPath `mirror-registry.sh` 로 채운 상태였고, 그 이미지 목록(`as-images.txt`)에는 pilot·proxyv2 가 없었습니다. 그래서 mirror 로 채운 Harbor 에도 이 단계가 필요합니다. 차트가 모두 이미 있어 `helm push` 경로는 실행되지 않았습니다(38-istio README 4.6절).
 
 ---
 
@@ -926,7 +926,7 @@ unset HU HP
 `install.sh` 와 `istio-configure.sh` 는 설치 전에 같은 확인을 스스로 합니다. Harbor 이름 해석, CA(CA 파일이 있으면 containerd `hosts.toml` 도 요구, 없으면 OS 신뢰 저장소로 검증), `/api/v2.0/ping`, 프로젝트 public 여부, 이미지 존재(Harbor API), `crictl pull`, 차트 `helm pull` + sha256 대조 순서이고, 하나라도 실패하면 아무것도 바꾸지 않고 멈춥니다. Harbor 사본의 이미지 다이제스트는 원본과 다를 수 있어(5.2.5절 주의점 5) 이미지는 태그로 참조하고, 차트만 핀과 대조합니다. 차트 tgz sha256 이 다르면 번들 차트와 내용(`diff -r`)을 비교해 같을 때만 설치합니다(38-istio README 4.3절).
 
 > [!WARNING]
-> **실제 Harbor 등록(hydrate 실행, `feed-istio-to-harbor.sh` 실행)은 미검증입니다.** `--source harbor` 설치 경로(Harbor API 조회, `crictl pull`, `helm registry login` + `helm pull`, 차트 대조, pull secret)는 as2510-vanilla 의 기존 Harbor(private 프로젝트, CA 는 OS 신뢰 저장소)에서 실기로 확인했습니다(5.3.7절). CA 파일을 쓰는 경로(`/etc/containerd/certs.d/<host>/hosts.toml` 요구, `--cacert`/`--ca-file`)는 실행되지 않았고 `bash -n`, `shellcheck`, `--dry-run` 으로만 확인했습니다.
+> **hydrate 실행은 미검증입니다.** `feed-istio-to-harbor.sh` 로 채운 새 Harbor(asw3)에서 `--source harbor` 설치 경로(Harbor API 조회, `crictl pull`, `helm registry login` + `helm pull`, 차트 대조, pull secret)를 실기로 확인했습니다(2026-11-10, 5.3.7절). 이때 CA 파일 경로(`/etc/docker/certs.d/<host>/ca.crt` + containerd `hosts.toml`, `--cacert`/`--ca-file`)도 처음 실행했습니다. 그 전(2026-11-09)에는 예전 Harbor(asw2)에서 CA 를 OS 신뢰 저장소로 검증하는 경로를 확인했습니다.
 
 #### 5.3.3 Istio 설치
 
@@ -999,10 +999,10 @@ kubectl -n istio-system describe secret istio-ingressgateway-certs | sed -n '/^D
 | HAProxy 경유 80/443/15021 | 두 환경 | 200. 443 은 사내 CA 로 검증 |
 | 재실행 멱등성 | as2510-vanilla | 기존 파드 UID·재시작 수 같음. 늘어난 gateway 파드는 HPA 확장 |
 | **hydrate 실행** | — | **미검증** |
-| **`feed-istio-to-harbor.sh` 실제 등록** | asw3 새 Harbor(10.32.99.7) | **미검증**. `--dry-run` 과 사전 확인(Harbor `ping`·CA 검증까지)만 시험 번들로 확인 (2026-11-10) |
-| Harbor 재설치 뒤 재설치 | as2510-vanilla, Harbor asw2(10.32.99.6) → asw3(10.32.99.7) (2026-11-10) | **미실시**. 새 Harbor 에 8개가 없어 `install.sh` 가 사전 확인에서 멈췄습니다. 위 `--source harbor` 결과는 예전 Harbor(asw2) 기준입니다 |
+| `feed-istio-to-harbor.sh` 실제 등록 | asw3 새 Harbor(10.32.99.7) (2026-11-10) | 올림 2 / 건너뜀 6, 다시 실행하면 건너뜀 8. 두 번 모두 통과 8/0. 올린 이미지 다이제스트 = 핀. `helm push` 는 실행되지 않음(차트가 이미 있었음) |
+| Harbor 재설치 뒤 재설치 | as2510-vanilla ascp·asw 2노드, Harbor asw2(10.32.99.6) → asw3(10.32.99.7) (2026-11-10) | feed 뒤 `install.sh` 27/0(HAProxy 경유 포함), `istio-configure.sh` 14/0, `--check-only` 27/0·14/0. istiod `ImagePullBackOff` → Running |
 | AS 라우팅, 에어갭(`airgap-on.sh`) | — | **미검증 / 미실시** |
-| Harbor 중단·에어갭에서 gateway 기동(`imagePullPolicy: IfNotPresent`) | — | **미검증**. as2510-vanilla 에서 노드별 첫 gateway 파드는 이미지가 있는데도 Harbor 에서 다시 받았습니다(원인 미확인) |
+| Harbor 중단·에어갭에서 gateway 기동(`imagePullPolicy: IfNotPresent`) | — | **미검증**. as2510-vanilla 에서 노드별 첫 gateway 파드는 이미지가 있는데도 Harbor 에서 다시 받았습니다. 2026-11-10 istiod 파드도 같았습니다. kubelet 의 pull 자격증명 확인(`KubeletEnsureSecretPulledImages`, 38-istio README 12절) 때문으로 추정합니다 |
 
 as2510-vanilla 에서 찾은 주의점:
 

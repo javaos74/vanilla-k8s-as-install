@@ -198,7 +198,8 @@ ISTIO_LOCAL_IMAGES=1 ./00-common/build-in-container.sh 24.04 38-istio  # + 검�
 
 - 빌드 도구는 helm 과 skopeo 다. helm 이 없으면 `HELM_URL` 로 임시 설치하고, skopeo 가 없으면 OS 패키지로 설치한다(`sudo apt-get install skopeo` / `dnf install skopeo`).
 - 번들에 들어가는 `site.env` 는 빌드 작업 사본의 `00-common/site.env` 다(없으면 `site.env.example`). `feed-istio-to-harbor.sh` 와 `install.sh` 는 그 안의 `HARBOR_HOSTNAME`·`AS_FQDN` 을 쓰므로 빌드 전에 대상 사이트 값으로 채운다. 번들을 푼 뒤 `site.env` 를 고치면 `SHA256SUMS` 검증에서 멈춘다.
-- 10-k8s 를 설치한 노드에서는 `build-in-container.sh` 가 실패한 적이 있다(charles-weed). 그때는 그 노드에서 일반 사용자로 `38-istio/build-bundle.sh` 를 직접 실행한다(as2510-vanilla ascp 에서 성공, 2026-11-09).
+  - `git archive` 처럼 커밋된 파일만 옮겨 빌드하면 `site.env` 가 없다. `site.env.example` 을 `site.env` 로 복사해 `HARBOR_HOSTNAME`·`AS_FQDN` 을 채운다. pull·push 계정은 stdin 으로 넘기므로(4.2절, 4.5절) 비밀번호 항목은 비워 둔다. 번들에 비밀번호가 들어가지 않는다(2026-11-10 asw3 빌드가 이렇게 했다).
+- 10-k8s 를 설치한 노드에서는 `build-in-container.sh` 가 실패한 적이 있다(charles-weed). 그때는 그 노드에서 일반 사용자로 `38-istio/build-bundle.sh` 를 직접 실행한다(as2510-vanilla ascp 에서 성공, 2026-11-09). 이미지 4개를 넣는 운영 번들은 asw3(Harbor 호스트, helm v4.3.1, skopeo 1.13.3)에서 일반 사용자로 `build-bundle.sh` 를 실행해 만들었다(2026-11-10, 4.6절).
 
 `build-bundle.sh` 가 하는 확인:
 
@@ -297,14 +298,14 @@ CA:
 - skopeo: OS 패키지로 설치한다(Ubuntu universe·RHEL AppStream 의 `skopeo`, 에어갭이면 사내 미러). 또는 skopeo 가 있고 Harbor 에 닿는 다른 호스트에서 실행한다. 이 도구는 kubeconfig 가 필요 없어 어느 호스트에서도 된다.
 - skopeo 를 대신하는 경로(podman·docker 의 load → push)는 두지 않았다. 레이어를 다시 압축해 다이제스트가 바뀌기 때문이다. 결과는 hydrate 와 같은 성질이 되고, "올린 이미지 다이제스트 = 핀" 으로 확인할 수 없다.
 - `--preserve-digests` 가 없는 옛 skopeo 도 쓸 수 있다. `dir` → registry 는 형식을 바꾸지 않으므로 다이제스트가 그대로이고, 4번 확인이 핀과 같은지 본다.
-- helm: 10-k8s 로 설치한 노드에는 있다. 다른 호스트면 10-k8s 번들 `bin/helm-v3.22.0-linux-amd64.tar.gz` 를 푼다(상위 README 5.2.2). helm 4 는 쓰는 플래그(`helm push --ca-file`, `helm registry login --password-stdin`, `--registry-config`)가 같다(2026-11-10 `--help` 로 확인, 실행은 미검증).
+- helm: 10-k8s 로 설치한 노드에는 있다. 다른 호스트면 10-k8s 번들 `bin/helm-v3.22.0-linux-amd64.tar.gz` 를 푼다(상위 README 5.2.2). helm 4 는 쓰는 플래그(`helm push --ca-file`, `helm registry login --password-stdin`, `--registry-config`)가 같다(2026-11-10 `--help` 로 확인). asw3 의 helm v4.3.1 로 `helm registry login --password-stdin`, `helm pull --registry-config --ca-file` 을 실행했다(4.6절). `helm push` 는 차트 4개가 이미 있어 실행되지 않았다.
 
 환경별 도구 상태(2026-11-10 확인):
 
 | 호스트 | skopeo | helm | 비고 |
 |---|---|---|---|
 | ascp(10.32.99.3, control plane) | 1.13.3(`--preserve-digests` 있음) | v3.22.0 | 그대로 실행할 수 있다 |
-| asw3(10.32.99.7, Harbor 호스트) | 없음 | v4.3.1(snap) | skopeo 를 설치해야 한다. 빌드(`build-bundle.sh`)도 skopeo 가 없으면 apt 로 설치하려 한다 |
+| asw3(10.32.99.7, Harbor 호스트) | 1.13.3(`--preserve-digests` 있음, 사용자가 08:59 UTC 에 apt 로 설치) | v4.3.1(`/usr/local/bin`, 사용자가 snap 판을 지우고 다시 설치) | 빌드와 등록을 이 호스트에서 했다(4.6절) |
 
 ### 4.3 다이제스트와 sha256
 
@@ -367,19 +368,37 @@ CA:
 
 ### 4.6 검증 상태
 
-**Harbor 위치가 바뀌었다(2026-11-10).** as2510-vanilla 의 `harbor.myrobots.co.kr` 은 asw2(10.32.99.6)에 있었다. 사용자가 Harbor 를 asw3(10.32.99.7)에 다시 설치했고, 사내 DNS 의 `harbor.myrobots.co.kr` 이 10.32.99.7 을 가리킨다. asw2 는 클러스터에서 빠졌고 10.32.99.6 은 응답하지 않는다. 아래 2026-11-09 결과는 asw2 의 예전 Harbor 기준이다.
+**Harbor 위치가 바뀌었다(2026-11-10).** as2510-vanilla 의 `harbor.myrobots.co.kr` 은 asw2(10.32.99.6)에 있었다. 사용자가 Harbor 를 asw3(10.32.99.7)에 다시 설치했고, 사내 DNS 의 `harbor.myrobots.co.kr` 이 10.32.99.7 을 가리킨다. asw2 는 클러스터에서 빠졌고 10.32.99.6 은 응답하지 않는다. 2026-11-09 결과는 asw2 의 예전 Harbor 기준이고, 2026-11-10 결과는 asw3 의 새 Harbor 기준이다.
 
-- 새 Harbor 에는 hydrate 를 하지 않았다. 그래서 ascp 에서 `install.sh` 가 사전 확인 6번에서 `Harbor 에 uipath/istio/pilot:1.30.3-20260730_echo 가 없다` 로 멈췄다(사용자 실행, 2026-11-10). istiod 파드는 새 Harbor 에서 pilot 을 받지 못해 `ImagePullBackOff` 였고, gateway·plugin-http 는 노드에 남은 이미지로 Running 이었다(읽기 전용 확인).
-- 이 경우를 위해 `feed-istio-to-harbor.sh`(4.2절)를 더했다. **실제 Harbor 에서 실행한 것은 아직 없다(실기 미검증).** 지금까지 한 확인은 다음과 같다.
-  - `bash -n`, `shellcheck`(기준 커밋 `d6f45b9` 대비 새 경고 없음).
-  - 실제 매니페스트(registry.uipath.com, crane)와 실제 차트 4개, 가짜 blob 으로 만든 시험 번들에서 `--dry-run` 을 ascp(skopeo 1.13.3, helm v3.22.0)와 asw3(skopeo 없음, helm v4.3.1)에서 실행했다. 사전 확인은 ascp 에서 Harbor `ping`·CA 검증까지 통과한 뒤 계정이 없어 멈췄고, asw3 에서는 skopeo 가 없어 Harbor 에 접속하기 전에 멈췄다. Harbor 는 바뀌지 않았다.
-  - `build-bundle.sh` 의 이미지 단계(`skopeo copy … dir:`)는 아직 실행하지 않았다.
+**새 Harbor 복구 실기 (2026-11-10, asw3 Harbor v2.15.2, ascp·asw 2노드, k8s 1.36.4)**
+
+- 시작 상태
+  - 새 Harbor 에는 hydrate 를 하지 않았다. ascp 에서 `install.sh` 가 사전 확인 6번에서 `Harbor 에 uipath/istio/pilot:1.30.3-20260730_echo 가 없다` 로 멈췄다(사용자 실행).
+  - `uipath` 프로젝트(private)에는 저장소 313개가 이미 있었다. 사용자가 asw3 의 `~/as/mirror-registry.sh`(UiPath 온라인 미러, `as-images.txt`·`as-helm-charts.txt`)로 채운 것으로 보인다(push_time 07:01~08:06 UTC). 8개 중 wasm·curl 이미지와 차트 4개는 있었고 pilot·proxyv2 는 없었다. 그 `as-images.txt`(217줄)에는 `istio/pilot`·`istio/proxyv2` 가 없다. mirror-registry.sh 로 채운 Harbor 에서도 feed 가 필요하다.
+  - istiod 파드(ascp)는 `ImagePullBackOff` 였다. pilot 이미지가 노드에 있었는데도 kubelet 이 Harbor 에서 받으려다 `not found` 로 실패했다. gateway·plugin-http 는 Running 이었다. 원인은 kubelet 의 이미지 pull 자격증명 확인(12절 표)으로 추정한다.
+- 빌드: asw3 에서 브랜치 커밋 `0ffb7c6` 의 `git archive` 사본으로 `build-bundle.sh` 를 일반 사용자로 실행했다(rc=0). 번들의 `site.env` 는 `site.env.example` 에서 `HARBOR_HOSTNAME`·`AS_FQDN` 등 비밀이 아닌 값만 채운 것이다. `istio-1.30.3.tar.gz` 203,559,490 바이트, sha256 `22e537b1c3b7737d59834a86e423e5cee05e6b8f06819dbd029175bc561e018b`, `SHA256SUMS` 49개. 이미지 4개의 `manifest.json` sha256 = 핀, 차트 4개 sha256 = 핀.
+- `feed-istio-to-harbor.sh`(asw3, 푼 번들에서)
+  - `--dry-run`: rc=0. 8개의 대상 경로·원본 다이제스트·명령과 도구 8개 모두 OK.
+  - 첫 실행: 올림 2(pilot, proxyv2) / 건너뜀 6, `검증 결과: 통과 8 / 실패 0`. 올린 두 이미지의 Harbor 다이제스트 = 핀. 이미 있던 wasm·curl 의 다이제스트도 핀과 같았다. 이미 있던 차트 4개는 tgz sha256 이 핀과 달랐고(재패키징) 내용은 핀과 같았다(4.3절).
+  - 두 번째 실행: 올림 0 / 건너뜀 8, 통과 8 / 실패 0.
+  - Harbor API: `repo_count` 313 → 315. 이미 있던 6개의 다이제스트·push_time 은 그대로다. 지운 것은 없다.
+  - 비밀번호(stdin 두 줄)가 프로세스 인자·로그에 나오지 않았다. 실행 중 `strace -f -e trace=execve` 의 모든 argv, `ps -eww` 샘플(0.05초 간격), 같은 사용자 프로세스의 `/proc/<pid>/environ`, 출력 로그, `/var/log/auth.log`·`syslog`·journal, `/tmp` 에서 일치 0.
+- ascp
+  - istiod 는 pilot 을 올린 뒤 kubelet 재시도로 09:27:29Z 에 Running 이 됐다(install.sh 전). imageID `harbor.myrobots.co.kr/uipath/istio/pilot@sha256:ba73c276…`.
+  - `install.sh`(4.5절 stdin 방식): 통과 27 / 실패 0(HAProxy 경유 포함). CA 파일 경로(`/etc/docker/certs.d/harbor.myrobots.co.kr/ca.crt` + containerd `hosts.toml`)를 처음 실기로 실행했다. pull secret 은 자격증명이 같아 바뀌지 않았다(resourceVersion 같음).
+  - `istio-configure.sh`: 통과 14 / 실패 0. wasm·curl `crictl pull`, 차트 내용 = 핀. hook Job 파드가 asw 에서 curl 을 새 Harbor 에서 받았다.
+  - `install.sh --check-only` 27/0, `istio-configure.sh --check-only` 14/0. HAProxy 경유 `127.0.0.1`·`10.32.99.3` 의 80/443/15021 이 smoke 동안 200 이다.
+- 아직 실기로 실행되지 않은 것: feed 의 `helm push`(차트 4개가 이미 있었다), hydrate 실행, 에어갭.
+
+**2026-11-09 (예전 Harbor asw2)**
+
+- 새 Harbor 복구 전의 기록이다. 이 무렵 `feed-istio-to-harbor.sh` 는 시험 번들(실제 매니페스트·차트, 가짜 blob)로 `--dry-run` 과 사전 확인(ascp 에서 Harbor `ping`·CA 검증까지)만 확인했다.
 - **Harbor 에서 받아 설치하는 경로(`--source harbor`)는 실기로 검증했다**(2026-11-09, as2510-vanilla 3노드, 그때의 Harbor `harbor.myrobots.co.kr` = asw2, private 프로젝트 `uipath`, Harbor 2.15.2).
   - 확인한 것: Harbor API 조회(자격증명), `crictl pull`(3노드), `helm registry login --registry-config` + `helm pull`(CA 파일 없이 OS 신뢰 저장소), 차트 대조(4개 모두 재패키징, 내용 = 핀), pull secret, imageID 판정.
   - 8개 아티팩트는 이미 Harbor 에 있어 push 하지 않았다.
   - **이 결과는 이전 Istio 잔여물을 손으로 정리한 뒤에 나왔다.** 이 클러스터에는 릴리스 `base` 가 남긴 CRD 15개와, 없는 istiod 를 가리키는 `failurePolicy: Fail` webhook 2개가 있었다. 설치 전에 CRD 15개의 소유 annotation 을 `base` → `istio-base` 로 바꾸고 webhook 2개를 지웠다(12.1절). `install.sh` 는 이 정리를 하지 않고, 사전 확인도 이 상태를 찾지 않는다.
 - **hydrate 실행은 미검증이다.** 2026-11-09 에 검증한 Harbor 는 사용자가 이전에(2026-11-06) 채운 것이다. 어떤 도구로 채웠는지는 확인하지 못했다. 그때 30-harbor 는 설치하지 않았다(사용자 결정).
-- `HARBOR_CA` 파일을 쓰는 경로(`/etc/containerd/certs.d/<host>/hosts.toml` 요구, `--cacert`/`--ca-file`)는 실기로 실행되지 않았다(as2510-vanilla 에는 certs.d 가 없다). `bash -n`, `shellcheck`, `--dry-run` 으로만 확인했다.
+- `HARBOR_CA` 파일을 쓰는 경로(`/etc/containerd/certs.d/<host>/hosts.toml` 요구, `--cacert`/`--ca-file`)는 2026-11-09 에는 실행되지 않았다(그때 as2510-vanilla 에는 certs.d 가 없었다). 2026-11-10 ascp 에서 실행했다(위).
 
 ---
 
@@ -658,9 +677,10 @@ charles-weed(2 vCPU, 메모리 3,832MiB, swap 없음) 단일 노드 기준 reque
 | 항목 | 상태 |
 |---|---|
 | `bash -n`, `shellcheck` | 완료 (2026-11-10, `feed-istio-to-harbor.sh` 추가 뒤). 38-istio 는 SC1091 note 만, 번들 배치로 `-x` 로 따라가면 경고 없음. 기준 커밋 `d6f45b9` 와 같다 |
-| 번들 빌드(`ISTIO_LOCAL_IMAGES=1 build-in-container.sh 24.04 38-istio`) | 완료 (2026-11-07, charles-weed, Ubuntu 24.04). 차트 sha256 = 핀, 렌더링 단언 통과. **이미지 4개를 넣는 지금 빌드(`images/`, 3.1절)는 아직 실행하지 않았다** |
-| `feed-istio-to-harbor.sh --dry-run` | 시험 번들(실제 매니페스트·차트, 가짜 blob)로 확인 (2026-11-10, ascp·asw3). 사전 확인은 Harbor `ping`·CA 검증까지 통과(ascp), skopeo 없음으로 멈춤(asw3) |
-| **`feed-istio-to-harbor.sh` 실제 등록·재실행 멱등성** | **미검증** (4.6절). asw3 의 새 Harbor 에 아직 올리지 않았다 |
+| 번들 빌드(`ISTIO_LOCAL_IMAGES=1 build-in-container.sh 24.04 38-istio`) | 완료 (2026-11-07, charles-weed, Ubuntu 24.04). 차트 sha256 = 핀, 렌더링 단언 통과 |
+| 운영 번들 빌드(이미지 4개 포함, `images/`, 3.1절) | 완료 (2026-11-10, asw3, 일반 사용자 `build-bundle.sh`, helm v4.3.1, skopeo 1.13.3). `istio-1.30.3.tar.gz` 203,559,490 바이트, sha256 `22e537b1…018b`. 이미지 manifest sha256·차트 sha256 = 핀 (4.6절) |
+| `feed-istio-to-harbor.sh --dry-run` | 완료 (2026-11-10, asw3, 실제 번들). rc=0, 도구 8개 OK |
+| `feed-istio-to-harbor.sh` 실제 등록·재실행 멱등성 | 완료 (2026-11-10, asw3 새 Harbor). 첫 실행 올림 2(pilot·proxyv2) / 건너뜀 6, 통과 8/0. 두 번째 실행 건너뜀 8, 통과 8/0. 올린 이미지 다이제스트 = 핀. 비밀번호가 argv·`ps`·로그에 나오지 않음(4.6절). `helm push` 는 차트가 이미 있어 실행되지 않았다 |
 | `--dry-run --source harbor` / `--source local` (`install.sh`, `istio-configure.sh`) | 완료 (2026-11-07, charles-weed, root·클러스터 없이) |
 | `verify-urls.sh` Istio 절 | 16/16 통과 (2026-11-07) |
 | 단일 노드 실기 설치(`--source local`) + 판정 | 완료 (2026-11-08, charles-weed 단일 노드, Ubuntu 24.04). `install.sh` 23/0, HAProxy 경유 포함 `--check-only` 26/0. 그 뒤 VM 연결이 끊겨 local 경로의 재실행 멱등성은 보지 못했다 |
@@ -671,12 +691,12 @@ charles-weed(2 vCPU, 메모리 3,832MiB, swap 없음) 단일 노드 기준 reque
 | HAProxy 경유 80/443/15021 | 완료 (charles-weed, as2510-vanilla). 443 은 사내 CA 로 검증해 200 `istio-smoke-ok` |
 | 재실행 멱등성 | 완료 (as2510-vanilla). 두 번째 `install.sh`·`istio-configure.sh` 뒤 기존 파드 UID·재시작 수가 같고, pod-template-hash 가 같다. 늘어난 gateway 파드는 HPA 확장이다(12절) |
 | Harbor 차트 대조 | as2510-vanilla Harbor 의 차트 4개가 다시 패키징돼 tgz sha256 이 핀과 달랐다. 내용 대조(4.3절)로 통과 |
-| **hydrate 실행** | **미검증** (4.6절) |
-| Harbor 재설치(asw2 → asw3, 2026-11-10) 뒤 `--source harbor` 재설치 | **미실시**. 새 Harbor 에 8개가 없어 `install.sh` 가 사전 확인에서 멈췄다(4.6절) |
-| CA 파일(`certs.d`) 경로 | **미실행** (4.6절) |
+| **hydrate 실행** | **미검증** (4.6절). 새 Harbor 는 사용자가 `mirror-registry.sh` 로 채운 상태였고, 그 목록에는 pilot·proxyv2 가 없었다 |
+| Harbor 재설치(asw2 → asw3, 2026-11-10) 뒤 `--source harbor` 재설치 | 완료 (2026-11-10, ascp·asw 2노드). feed 뒤 `install.sh` 27/0, `istio-configure.sh` 14/0, `--check-only` 27/0·14/0. istiod `ImagePullBackOff` → Running (4.6절) |
+| CA 파일(`certs.d`) 경로 | 완료 (2026-11-10, ascp. `/etc/docker/certs.d/<host>/ca.crt` + containerd `hosts.toml`) |
 | AS 라우팅(AS 설치 뒤) | **미검증**. Wasm 필터 적재와 smoke 응답까지만 봤다 |
 | 에어갭(`airgap-on.sh`) | **미실시**. 두 환경 모두 인터넷에 연결된 상태였다 |
-| Harbor 중단·에어갭에서 gateway 기동(`imagePullPolicy: IfNotPresent`, 5.2절) | **미검증**. as2510-vanilla 에서 노드별 첫 gateway 파드는 `IfNotPresent` 인데도 Harbor 에서 다시 받았다(원인 미확인). 같은 노드의 다음 파드들은 `already present on machine` 이었다. charles-weed `--source local` 경로는 수정 뒤 다시 실행하지 못했다 |
+| Harbor 중단·에어갭에서 gateway 기동(`imagePullPolicy: IfNotPresent`, 5.2절) | **미검증**. as2510-vanilla 에서 노드별 첫 gateway 파드는 `IfNotPresent` 인데도 Harbor 에서 다시 받았다. 같은 노드의 다음 파드들은 `already present on machine` 이었다. 2026-11-10 ascp 의 istiod 파드도 이미지가 노드에 있는데 Harbor 에서 받으려다 실패했다. kubelet 의 pull 자격증명 확인(12절 표) 때문으로 추정한다. charles-weed `--source local` 경로는 수정 뒤 다시 실행하지 못했다 |
 | `--uninstall` | **미실행**. CRD 가 남는다는 것은 핀 base 차트를 `helm template` 으로 렌더링해 확인했다(CRD 15개 모두 `helm.sh/resource-policy: keep`) |
 
 ---
@@ -686,13 +706,14 @@ charles-weed(2 vCPU, 메모리 3,832MiB, swap 없음) 단일 노드 기준 reque
 | 증상 | 원인 | 조치 |
 |---|---|---|
 | `Harbor 에 uipath/istio/pilot:<태그> 가 없다` | hydrate 도 `feed-istio-to-harbor.sh` 도 하지 않았거나(Harbor 를 새로 설치한 경우 포함), 다른 프로젝트·다른 AS 버전으로 했다 | 이 번들의 `./feed-istio-to-harbor.sh` 로 8개만 올리거나(4.2절), 상위 README 5.2 의 hydrate 를 `<HARBOR_HOSTNAME>/uipath` 로 실행한다. 프로젝트가 다르면 `site.env` 의 `ISTIO_HARBOR_PROJECT` |
-| feed: `필요한 명령이 없다: skopeo` | 이 호스트에 skopeo 가 없다(예: asw3) | skopeo 를 OS 패키지로 설치하거나, skopeo·helm 이 있고 Harbor 에 닿는 다른 호스트(예: control plane)에서 실행한다(4.2절). Harbor 는 바뀌지 않았다 |
+| feed: `필요한 명령이 없다: skopeo` | 이 호스트에 skopeo 가 없다(2026-11-10 사용자가 설치하기 전의 asw3) | skopeo 를 OS 패키지로 설치하거나, skopeo·helm 이 있고 Harbor 에 닿는 다른 호스트(예: control plane)에서 실행한다(4.2절). Harbor 는 바뀌지 않았다 |
 | feed: `Harbor 인증 실패` / `프로젝트 … 가 없거나 … 볼 수 없다` | 계정·비밀번호가 틀렸거나, 프로젝트가 없거나, 그 계정이 프로젝트 멤버가 아니다 | 계정을 확인한다. 프로젝트는 feed 가 만들지 않는다. 상위 README 5.2.3 대로 먼저 만든다 |
 | feed: `skopeo copy 실패` / `helm push 실패` | push 권한이 없거나(pull 전용 robot), 네트워크·CA 문제다. 이미 올린 것은 남는다 | push 권한이 있는 계정으로 다시 실행한다. 없는 것만 올린다 |
 | feed: 이미지 `다이제스트 … ≠ 핀` 경고 | 이미 있던 이미지(hydrate 사본 등)의 다이제스트가 원본과 다르다 | 정상이다. 덮어쓰지 않는다. `install.sh` 는 태그로 받는다(4.3절) |
 | feed: 차트 `내용이 핀과 다르다` 실패 | Harbor 에 같은 태그의 다른 차트가 이미 있다. 다른 AS 버전으로 hydrate 했을 때 생긴다. `install.sh` 도 이 차트에서 멈춘다 | feed 는 덮어쓰지 않는다. 2.3절 절차로 `versions.env` 를 hydrate 한 AS 버전에 맞추거나, Harbor 관리자가 확인한 뒤 그 태그를 정리하고 다시 실행한다 |
 | `Harbor 의 차트 ... 내용이 핀 차트와 다르다` | hydrate 한 AS 번들 버전과 `UIPATH_AS_VERSION` 이 다르다. tgz sha256 만 다른 것은 재패키징이라 통과한다(4.3절) | 2.3절 절차로 `versions.env` 를 맞추고 번들을 다시 빌드한다 |
 | `containerd 가 ... 를 받지 못했다` | 노드가 Harbor CA 를 신뢰하지 않거나(`hosts.toml` 없음), private 인데 자격증명이 틀렸다 | `05-certs/deploy-certs.sh --local`(모든 노드는 `--nodes`). private 이면 `HARBOR_PULL_USER`/`HARBOR_PULL_PASSWORD` |
+| 이미지가 노드에 있는데(`crictl images`) 파드가 `ImagePullBackOff` 이고 메시지가 `failed to resolve image … not found` | 추정: Kubernetes 1.35 부터 기본으로 켜진 kubelet 기능 `KubeletEnsureSecretPulledImages`(beta). pull secret 을 쓰는 파드는, kubelet 이 그 자격증명으로 받은 기록(`/var/lib/kubelet/image_manager/pulled/`)이 없으면 이미지가 있어도 레지스트리에서 다시 받아 확인한다([Kubernetes 문서 Images, "Ensure image pull credential verification"](https://kubernetes.io/docs/concepts/containers/images/)). 2026-11-10 ascp 의 istiod 파드가 이랬다. `install.sh` 의 `crictl pull` 은 kubelet 기록을 남기지 않는다. Harbor 가 내려가 있으면 캐시된 이미지로도 새 파드가 뜨지 못할 수 있다 | Harbor 에 그 태그를 올린다(feed 또는 hydrate). kubelet 이 재시도(최대 5분 간격)할 때 뜬다. 2026-11-10 에는 pilot 을 올리고 약 2분 뒤 Running 이 됐고, 그때 pulled 기록에 `istio-system/uipathpullsecret` 이 생겼다 |
 | `curl`·`openssl` 로는 Harbor 가 검증되는데 `crictl pull` 만 `x509: certificate signed by unknown authority` | containerd 는 기동할 때 읽은 OS 신뢰 저장소를 계속 쓴다. 그 뒤에 넣은 CA 는 모른다(as2510-vanilla 실측) | 그 노드에서 `sudo systemctl restart containerd`(실행 중인 컨테이너는 유지된다). 05-certs README 9절 |
 | Harbor 노드 재부팅 뒤 `/api/v2.0/ping` 이 401 `'Authorization' should start with 'Harbor-Secret'` | Harbor 컨테이너 IP 가 바뀌었는데 Harbor nginx 가 `core` 를 예전 IP 로 들고 있어 요청이 jobservice 로 간다(as2510-vanilla 실측) | Harbor 호스트에서 `sudo docker restart nginx`(또는 `systemctl restart harbor.service`). 10-k8s `install.sh` 의 Harbor 주석과 같은 계열이다 |
 | Wasm 적재·smoke 판정 직후 gateway 파드가 2~5개로 늘었다 | gateway 차트 기본 HPA(min 1/max 5, CPU 목표 80%, requests 100m). as2510-vanilla 에서는 istio-configure 적재와 판정용 smoke 적용 직후 HPA 가 "cpu resource utilization above target" 으로 1→3→5 로 늘렸다(metrics-server 가 없는 charles-weed 에서는 HPA 가 동작하지 않았다) | 5분 뒤 1개로 줄어든다. 고정하려면 gateway values 의 `autoscaling`·`resources` 를 조정한다(이 번들은 차트 기본값을 쓴다) |

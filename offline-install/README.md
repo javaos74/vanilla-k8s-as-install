@@ -847,7 +847,7 @@ AS 전체 hydrate(약 57GB) 없이 Istio 를 먼저 설치하거나, Harbor 를 
 - 결과 확인: 이미지는 Harbor API 의 태그와 다이제스트(이 도구가 올린 것은 `versions.env` 핀과 같습니다), 차트는 `helm pull --version` 후 tgz sha256 을 봅니다. 출력 끝이 `검증 결과: 통과 8 / 실패 0` 이어야 합니다. 확인 명령은 5.3.2절과 같습니다.
 
 > [!NOTE]
-> **실기 결과 (2026-11-10, asw3 새 Harbor):** 첫 실행은 올림 2(pilot·proxyv2) / 건너뜀 6, 다시 실행하면 건너뜀 8 이었고, 두 번 모두 `통과 8 / 실패 0` 이었습니다. 새 Harbor 는 사용자가 UiPath `mirror-registry.sh` 로 채운 상태였고, 그 이미지 목록(`as-images.txt`)에는 pilot·proxyv2 가 없었습니다. 그래서 mirror 로 채운 Harbor 에도 이 단계가 필요합니다. 차트가 모두 이미 있어 `helm push` 경로는 실행되지 않았습니다(38-istio README 4.6절).
+> **실기 결과 (2026-11-10, asw3 새 Harbor):** 첫 실행은 올림 2(pilot·proxyv2) / 건너뜀 6, 다시 실행하면 건너뜀 8 이었고, 두 번 모두 `통과 8 / 실패 0` 이었습니다. 새 Harbor 는 사용자가 UiPath `mirror-registry.sh` 로 채운 상태였고, 그때 쓴 이미지 목록 사본(`as-images.txt`, 217줄)에는 pilot·proxyv2 가 없었습니다. UiPath 문서가 받으라는 `air-images.txt`(249줄)에는 둘 다 있습니다. mirror 로 채운 Harbor 에 Istio 이미지가 있는지는 쓴 목록에 따라 다르므로, 이 단계를 실행해 확인합니다(있는 것은 건너뜁니다). 차트가 모두 이미 있어 `helm push` 경로는 실행되지 않았습니다(38-istio README 4.6절).
 
 ---
 

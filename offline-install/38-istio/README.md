@@ -276,8 +276,8 @@ unset HU HP
 
 - **Harbor 에서 아무것도 지우거나 덮어쓰지 않는다.** 같은 태그가 있으면 내용이 달라도 올리지 않는다. 다시 실행하면 8개 모두 건너뛴다(멱등).
 - hydrate 와 경로·태그가 같으므로 순서를 가리지 않는다.
-  - hydrate 를 먼저 했으면 feed 는 8개를 모두 건너뛰고 확인만 한다.
-  - feed 를 먼저 했으면 나중의 hydrate 가 같은 태그를 다시 push 할 수 있다(hydrate 가 이미 있는 태그를 건너뛰는지는 확인하지 않았다). 그러면 이미지 다이제스트가 hydrate 사본의 것으로 바뀔 수 있지만 경로·태그가 같아 `install.sh` 에 영향이 없다(4.3절).
+  - hydrate 를 먼저 했으면 feed 는 8개를 모두 건너뛰고 확인만 한다. 같은 경로 규칙을 쓰는 `mirror-registry.sh` 로 이미 있던 6개를 이렇게 건너뛰었다(2026-11-10, 4.6절).
+  - feed 를 먼저 했으면 나중의 hydrate 가 같은 태그를 다시 push 한다. `hydrate-registry.sh` 2.2510.4 본문은 Harbor 에 이미 있는지 보지 않는다. 이미지는 방금 비운 로컬 podman 저장소만 보고(288·296행), 차트는 확인 없이 `helm push` 한다(352행). Harbor 는 기본 설정에서 태그를 새 아티팩트로 옮기고 이전 것은 태그 없이 남긴다([Harbor 문서 Tag Immutability Rules](https://goharbor.io/docs/2.13.0/working-with-projects/working-with-images/create-tag-immutability-rules/)). 프로젝트에 태그 불변 규칙이 있으면 hydrate 의 같은 태그 push 가 거부된다(asw3 Harbor 의 규칙은 확인하지 않았다). 그래서 이미지 다이제스트가 hydrate 사본의 것으로 바뀔 수 있지만 경로·태그가 같아 `install.sh` 에 영향이 없다(4.3절). 이 순서는 실행하지 않았다(hydrate 미검증).
 - 올리는 도중 실패하면(네트워크, 권한) 이미 올린 것은 남는다. 원인을 고친 뒤 다시 실행하면 없는 것만 올린다.
 
 인증:
@@ -316,6 +316,7 @@ CA:
   - `hydrate-registry.sh`(2.2510.4, `import_sf_charts`)는 번들의 tgz 를 `helm push` 로 그대로 올린다.
   - 하지만 as2510-vanilla 의 Harbor 차트 4개는 tar 항목 시각이 Harbor `push_time`(2026-11-06 03:01)과 같았다. 올리기 직전에 다시 패키징된 것이다. 어떤 도구로 올렸는지는 확인하지 못했다.
   - 풀어 놓은 내용은 `diff -r` 로 핀 차트와 같았고, tgz sha256 만 달랐다(2026-11-09 실측).
+  - UiPath `mirror-registry.sh`(2.2510.4, `copy_helm_charts`)는 `helm pull --untar` 로 풀고 `helm package` 로 다시 묶어 `helm push` 한다. asw3 새 Harbor 의 차트 4개가 이렇게 올라갔고, 역시 tgz sha256 만 다르고 내용은 핀과 같았다(2026-11-10, 4.6절).
 - 그래서 `install.sh`/`istio-configure.sh` 는 Harbor 에서 `helm pull` 한 차트를 두 단계로 대조한다(`istio-lib.sh` 의 `harbor_chart_pull`).
   1. tgz sha256 이 `versions.env` 핀과 같으면 통과한다.
   2. 다르면 번들의 같은 차트와 내용을 비교한다. 번들 차트는 `SHA256SUMS` 로 검증됐고, 여기서 다시 sha256 = 핀을 확인한다. 같으면 `재패키징, 내용 = 핀` 으로 통과하고 Harbor 에서 받은 차트로 설치한다. 다르면 멈춘다. 다르면 hydrate 한 AS 번들 버전이 `UIPATH_AS_VERSION` 과 다른 경우가 많다.
@@ -374,7 +375,9 @@ CA:
 
 - 시작 상태
   - 새 Harbor 에는 hydrate 를 하지 않았다. ascp 에서 `install.sh` 가 사전 확인 6번에서 `Harbor 에 uipath/istio/pilot:1.30.3-20260730_echo 가 없다` 로 멈췄다(사용자 실행).
-  - `uipath` 프로젝트(private)에는 저장소 313개가 이미 있었다. 사용자가 asw3 의 `~/as/mirror-registry.sh`(UiPath 온라인 미러, `as-images.txt`·`as-helm-charts.txt`)로 채운 것으로 보인다(push_time 07:01~08:06 UTC). 8개 중 wasm·curl 이미지와 차트 4개는 있었고 pilot·proxyv2 는 없었다. 그 `as-images.txt`(217줄)에는 `istio/pilot`·`istio/proxyv2` 가 없다. mirror-registry.sh 로 채운 Harbor 에서도 feed 가 필요하다.
+  - `uipath` 프로젝트(private)에는 저장소 313개가 이미 있었다. 사용자가 asw3 의 `~/as/mirror-registry.sh`(UiPath 온라인 미러, `as-images.txt`·`as-helm-charts.txt`)로 채운 것으로 보인다(push_time 07:01~08:06 UTC). 8개 중 wasm·curl 이미지와 차트 4개는 있었고 pilot·proxyv2 는 없었다.
+  - 그 `as-images.txt`(217줄)에는 `istio/pilot`·`istio/proxyv2` 가 없다. UiPath 문서가 `as-images.txt` 로 받으라는 `air-images.txt`(249줄)에는 둘 다 있다. asw3 사본은 거기서 32개(pilot·proxyv2, argocd, cert-manager, prometheus 계열 등 공유 구성 요소)가 빠진 부분집합이다. 어디서 받은 목록인지는 확인하지 못했다. 차트 목록(122줄)은 `embedded-helm-charts.txt` 와 같다.
+  - 그래서 mirror 로 채운 Harbor 에 pilot·proxyv2 가 있는지는 쓴 목록에 따라 다르다. feed 를 실행하면 있는 것은 건너뛰고 없는 것만 올린다.
   - istiod 파드(ascp)는 `ImagePullBackOff` 였다. pilot 이미지가 노드에 있었는데도 kubelet 이 Harbor 에서 받으려다 `not found` 로 실패했다. gateway·plugin-http 는 Running 이었다. 원인은 kubelet 의 이미지 pull 자격증명 확인(12절 표)으로 추정한다.
 - 빌드: asw3 에서 브랜치 커밋 `0ffb7c6` 의 `git archive` 사본으로 `build-bundle.sh` 를 일반 사용자로 실행했다(rc=0). 번들의 `site.env` 는 `site.env.example` 에서 `HARBOR_HOSTNAME`·`AS_FQDN` 등 비밀이 아닌 값만 채운 것이다. `istio-1.30.3.tar.gz` 203,559,490 바이트, sha256 `22e537b1c3b7737d59834a86e423e5cee05e6b8f06819dbd029175bc561e018b`, `SHA256SUMS` 49개. 이미지 4개의 `manifest.json` sha256 = 핀, 차트 4개 sha256 = 핀.
 - `feed-istio-to-harbor.sh`(asw3, 푼 번들에서)

@@ -2,31 +2,47 @@
 #---------------------------------------------------------------------
 # 38-istio : 오프라인 번들 빌드 (온라인 호스트에서 실행)
 #
-#   ./build-bundle.sh                       # 운영 번들만
+#   ./build-bundle.sh                       # 운영 번들(Harbor 등록용 이미지·차트 8개 포함)
 #   ISTIO_LOCAL_IMAGES=1 ./build-bundle.sh  # + 단일 노드 검증용 이미지 묶음
 #   (build-in-container.sh 도 ISTIO_LOCAL_IMAGES 를 컨테이너에 넘긴다)
 #
 # 산출물:
-#   bundle/istio-<ISTIO_VERSION>/ + .tar.gz + .sha256          운영 번들
+#   bundle/istio-<ISTIO_VERSION>/ + .tar.gz + .sha256          운영 번들 (약 205MB)
 #     차트 4개(versions.env 의 ISTIO_{BASE,ISTIOD,GATEWAY}_CHART, UIPATH_ISTIO_CONFIGURE_CHART),
-#     values·템플릿, install.sh, istio-configure.sh. **이미지는 넣지 않는다.**
+#     이미지 4개(pilot / proxyv2 / istio-wasm-plugin / curl, skopeo dir 형식, images/),
+#     values·템플릿, install.sh, istio-configure.sh, feed-istio-to-harbor.sh.
 #   bundle/istio-local-images-<ISTIO_VERSION>/ + .tar.gz + .sha256  (ISTIO_LOCAL_IMAGES=1)
-#     pilot / proxyv2 / istio-wasm-plugin / curl 이미지 tar. 단일 노드 검증 전용.
+#     같은 이미지 4개의 docker-archive tar(ctr import 용). 단일 노드 검증 전용.
 #
-# 왜 운영 번들에 이미지가 없는가:
+# 역할 나누기(사용자 결정 2026-11-10):
+#   build-bundle.sh (온라인)            registry.uipath.com 에서 8개를 다이제스트·sha256 핀으로 받아 번들에 넣는다.
+#   feed-istio-to-harbor.sh (오프라인)  번들의 8개를 Harbor 에 hydrate 와 같은 경로·태그로 올린다.
+#   install.sh / istio-configure.sh     Harbor 에서 받아 설치만 한다.
+#
+# 왜 운영 번들에 이미지를 넣는가:
 #   이 Istio 는 UiPath AS(versions.env UIPATH_AS_VERSION) 오프라인 번들에 들어 있는 것과
 #   같다. AS 버전을 바꾸면 versions.env 의 Istio 값도 함께 바꾼다(그 절의 주석).
-#   운영에서는 README 5.2 의 hydrate(hydrate-registry.sh)가 이미지와 차트를 Harbor 에
-#   올리고, install.sh 는 그 Harbor 경로에서 받는다. 번들에 다시 넣으면 같은 이미지를
-#   두 번 옮기게 된다.
+#   AS 전체 hydrate(README 5.2, as-cmk 약 57GB)를 하기 전이나, Harbor 를 새로 설치한 뒤에도
+#   이 번들만으로 Istio 를 설치할 수 있어야 한다. 이미지 압축 레이어 합계는 약 205MB 다.
+#   옵션으로 두지 않는다. 같은 이름의 번들이 두 가지가 되면 feed 가 어느 쪽에서 멈출지 알 수 없다.
+#
+# 이미지 형식 = skopeo dir(images/<이름>/{manifest.json, version, <sha256 hex>...}):
+#   원본 매니페스트 바이트와 압축 레이어를 그대로 둔다. 그래서 manifest.json 의 sha256 이
+#   versions.env 다이제스트 핀과 같고, feed 가 Harbor 에 올린 이미지의 다이제스트도 핀과 같다.
+#   다른 형식을 쓰지 않은 이유:
+#     - wasm·curl 은 docker v2s2 매니페스트다(pilot·proxyv2 는 OCI, 2026-11-10 skopeo inspect --raw 확인).
+#       oci / oci-archive 는 OCI 매니페스트만 담으므로 v2s2 를 OCI 로 바꾸고 다이제스트가 달라진다.
+#     - docker-archive 는 레이어를 압축 없이 담아, 다시 올릴 때 레이어와 매니페스트가 새로 만들어진다.
+#   검증용 묶음(6절)은 ctr import 가 읽는 docker-archive 를 그대로 쓴다.
 #
 # 왜 차트는 넣는가:
-#   --source local 설치와 --dry-run 렌더링에 쓴다. 합계 약 146KB 이고, registry.uipath.com
-#   원본과 같은 바이트다(sha256 핀). harbor 경로에서는 Harbor 에서 받은 차트를 이 핀과
-#   대조하고, Harbor 차트가 다시 패키징돼 tgz sha256 만 다르면 이 번들 차트와 내용을
-#   비교한다(istio-lib.sh harbor_chart_pull, README 4.3절).
+#   feed 가 Harbor 에 올리는 원본이고, --source local 설치와 --dry-run 렌더링에도 쓴다.
+#   합계 약 146KB 이고 registry.uipath.com 원본과 같은 바이트다(sha256 핀). harbor 경로에서는
+#   Harbor 에서 받은 차트를 이 핀과 대조하고, Harbor 차트가 다시 패키징돼 tgz sha256 만 다르면
+#   이 번들 차트와 내용을 비교한다(istio-lib.sh harbor_chart_pull, README 4.3절).
 #
 # 원본은 registry.uipath.com 이다. 이미지·차트 모두 익명으로 받을 수 있다(2026-11-07 확인).
+# 빌드 도구: helm(없으면 HELM_URL 로 임시 설치), skopeo(없으면 OS 패키지로 설치).
 # OS 의존 없음. 22.04 / 24.04 / 26.04 / el9 / el10 공용.
 #---------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,7 +62,7 @@ WITH_LOCAL="${ISTIO_LOCAL_IMAGES:-0}"
 
 step "Istio ${ISTIO_VERSION} (${ISTIO_TAG}) 번들 빌드 (OS 공용)"
 # 매번 다시 만드는 것은 지운다(이전 빌드의 site.env 잔존 방지, 60-cilium 주석 참고).
-# charts/ 는 다운로드 캐시라 남긴다(sha256 이 맞을 때만 재사용한다).
+# charts/ 와 images/ 는 다운로드 캐시라 남긴다(sha256 이 핀과 맞을 때만 재사용한다).
 rm -rf "${BUNDLE_DIR}/00-common" "${BUNDLE_DIR}/conf" "${BUNDLE_DIR}/90-verify"
 rm -f  "${BUNDLE_DIR}"/*.sh "${BUNDLE_DIR}"/*.md \
        "${BUNDLE_DIR}/SHA256SUMS" "${BUNDLE_DIR}/BUNDLE-INFO"
@@ -71,13 +87,12 @@ if [[ -z "$HELM_BIN" ]]; then
 fi
 ok "helm $("$HELM_BIN" version --short)"
 
-if [[ "$WITH_LOCAL" == "1" ]]; then
-    if ! command -v skopeo >/dev/null 2>&1; then
-        log "skopeo 설치(빌드 도구)"
-        pkg_install_build_tool skopeo
-    fi
-    ok "skopeo $(skopeo --version | awk '{print $3}')"
+# skopeo 는 운영 번들의 이미지(3절)와 검증용 묶음(6절)을 받는다.
+if ! command -v skopeo >/dev/null 2>&1; then
+    log "skopeo 설치(빌드 도구)"
+    pkg_install_build_tool skopeo
 fi
+ok "skopeo $(skopeo --version | awk '{print $3}')"
 
 #=====================================================================
 # 2. 차트 — registry.uipath.com 에서 받고 sha256 을 핀과 대조한다
@@ -124,7 +139,52 @@ for f in "${CHART_DIR}"/*.tgz; do
 done
 
 #=====================================================================
-# 3. values / 템플릿 생성
+# 3. 이미지 — registry.uipath.com 에서 다이제스트로 받는다 (Harbor 등록용, skopeo dir)
+#=====================================================================
+step "이미지 (docker://${ISTIO_SOURCE_REGISTRY}, 다이제스트 핀, skopeo dir 형식)"
+IMAGE_DIR="${BUNDLE_DIR}/images"
+mkdir -p "$IMAGE_DIR"
+
+# 원본 태그 ref 와 다이제스트 핀. 받는 것은 핀이다. 검증용 묶음(6절)도 이 목록을 쓴다.
+# feed-istio-to-harbor.sh 는 같은 versions.env 값으로 images/<image_to_filename 원본 ref>/ 를 찾는다.
+IMAGE_REFS=(
+    "${ISTIO_PILOT_IMAGE}|${ISTIO_PILOT_DIGEST}"
+    "${ISTIO_PROXYV2_IMAGE}|${ISTIO_PROXYV2_DIGEST}"
+    "${UIPATH_WASM_IMAGE}|${UIPATH_WASM_DIGEST}"
+    "${UIPATH_ISTIO_CURL_IMAGE}|${UIPATH_ISTIO_CURL_DIGEST}"
+)
+# --preserve-digests 가 있으면 다이제스트를 지킬 수 없을 때 받지 않고 실패한다. 없는 옛 skopeo 도
+# dir 형식은 매니페스트를 바꾸지 않는다. 어느 쪽이든 아래에서 manifest sha256 = 핀 을 확인한다.
+SKOPEO_HELP="$(skopeo copy --help 2>/dev/null || true)"
+PRESERVE=()
+[[ "$SKOPEO_HELP" != *--preserve-digests* ]] || PRESERVE=(--preserve-digests)
+KEEP_IMAGES=()
+for e in "${IMAGE_REFS[@]}"; do
+    img="${e%%|*}"; pin="${e#*|}"
+    [[ "$pin" =~ ^sha256:[0-9a-f]{64}$ ]] || die "다이제스트 형식 오류: ${img} ${pin}"
+    out="${IMAGE_DIR}/$(image_to_filename "$img")"
+    KEEP_IMAGES+=("$out")
+    if [[ -f "${out}/manifest.json" && "sha256:$(sha256_of "${out}/manifest.json")" == "$pin" ]]; then
+        log "이미 존재(manifest sha256 = 핀), 건너뜀: $(basename "$out")"
+        continue
+    fi
+    rm -rf "$out" "${out}.part"
+    skopeo copy ${PRESERVE[@]+"${PRESERVE[@]}"} --override-os linux --override-arch amd64 --retry-times 5 \
+        "docker://${img%:*}@${pin}" "dir:${out}.part" >/dev/null \
+        || die "이미지 받기 실패: ${img%:*}@${pin}"
+    [[ "sha256:$(sha256_of "${out}.part/manifest.json")" == "$pin" ]] \
+        || die "받은 매니페스트의 sha256 이 핀과 다르다: ${img%:*}@${pin} (형식이 바뀌었다)"
+    mv "${out}.part" "$out"
+    ok "$(basename "$out") ($(du -sh "$out" | cut -f1), manifest sha256 = 핀)"
+done
+# 이전 버전의 이미지 캐시가 남아 있으면 지운다.
+for d in "${IMAGE_DIR}"/*; do
+    [[ -e "$d" ]] || continue
+    [[ " ${KEEP_IMAGES[*]} " == *" ${d} "* ]] || { rm -rf "$d"; log "이전 이미지 캐시 제거: $(basename "$d")"; }
+done
+
+#=====================================================================
+# 4. values / 템플릿 생성
 #=====================================================================
 step "conf 생성"
 
@@ -294,7 +354,7 @@ EOF
 ok "conf/smoke.yaml.tmpl"
 
 #=====================================================================
-# 4. 렌더링으로 단언한다
+# 5. 렌더링으로 단언한다
 #=====================================================================
 step "helm template 으로 이미지·서비스 확인"
 
@@ -370,7 +430,7 @@ done
 ok "istio-configure pluginConfig: cluster_type=exclusive, k8s_distribution=vanilla"
 
 #=====================================================================
-# 5. 검증용 이미지 묶음 (ISTIO_LOCAL_IMAGES=1 일 때만)
+# 6. 검증용 이미지 묶음 (ISTIO_LOCAL_IMAGES=1 일 때만)
 #=====================================================================
 if [[ "$WITH_LOCAL" == "1" ]]; then
     step "검증용 이미지 묶음 ${LOCAL_NAME} (다이제스트 핀)"
@@ -378,16 +438,10 @@ if [[ "$WITH_LOCAL" == "1" ]]; then
     rm -f "${LOCAL_DIR}/SHA256SUMS" "${LOCAL_DIR}/BUNDLE-INFO"
     mkdir -p "${LOCAL_DIR}/images" "${LOCAL_DIR}/conf"
 
-    # 태그 ref 와 다이제스트 핀. 받는 것은 핀이고, tar 안의 이름은 태그 ref 다
-    # (ctr import 뒤 install.sh 가 그 이름으로 참조한다).
-    LOCAL_REFS=(
-        "${ISTIO_PILOT_IMAGE}|${ISTIO_PILOT_DIGEST}"
-        "${ISTIO_PROXYV2_IMAGE}|${ISTIO_PROXYV2_DIGEST}"
-        "${UIPATH_WASM_IMAGE}|${UIPATH_WASM_DIGEST}"
-        "${UIPATH_ISTIO_CURL_IMAGE}|${UIPATH_ISTIO_CURL_DIGEST}"
-    )
+    # 3절의 IMAGE_REFS(태그 ref 와 다이제스트 핀)를 쓴다. 받는 것은 핀이고, tar 안의 이름은
+    # 태그 ref 다(ctr import 뒤 install.sh 가 그 이름으로 참조한다).
     KEEP=()
-    for e in "${LOCAL_REFS[@]}"; do
+    for e in "${IMAGE_REFS[@]}"; do
         img="${e%%|*}"; pin="${e#*|}"
         [[ "$pin" =~ ^sha256:[0-9a-f]{64}$ ]] || die "다이제스트 형식 오류: ${img} ${pin}"
         out="${LOCAL_DIR}/images/$(image_to_filename "$img").tar"
@@ -416,7 +470,7 @@ bundle_version: ${BUNDLE_VERSION}
 built_at      : $(date -Is)
 built_on      : $(hostname)
 용도          : 단일 노드 검증 전용(install.sh / istio-configure.sh --source local).
-                운영은 hydrate 된 Harbor 에서 받는다(--source harbor).
+                운영은 Harbor 에서 받는다(--source harbor, hydrate 또는 feed-istio-to-harbor.sh).
 위치          : ${BUNDLE_NAME}/ 와 같은 디렉터리에 푼다(또는 ISTIO_LOCAL_IMAGES_DIR).
 pilot         : ${ISTIO_PILOT_IMAGE%:*}@${ISTIO_PILOT_DIGEST}
 proxyv2       : ${ISTIO_PROXYV2_IMAGE%:*}@${ISTIO_PROXYV2_DIGEST}
@@ -429,11 +483,11 @@ EOF
     ( cd "$(dirname "$LOCAL_TARBALL")" && sha256sum "$(basename "$LOCAL_TARBALL")" ) > "${LOCAL_TARBALL}.sha256"
     ok "검증용 묶음: ${LOCAL_TARBALL} ($(du -h "$LOCAL_TARBALL" | cut -f1))"
 else
-    log "검증용 이미지 묶음은 만들지 않는다(ISTIO_LOCAL_IMAGES=1 일 때만). 운영은 hydrate 된 Harbor 를 쓴다."
+    log "검증용 이미지 묶음은 만들지 않는다(ISTIO_LOCAL_IMAGES=1 일 때만). 운영은 Harbor 를 쓴다(feed-istio-to-harbor.sh 또는 hydrate)."
 fi
 
 #=====================================================================
-# 6. 패키징 (운영 번들)
+# 7. 패키징 (운영 번들)
 #=====================================================================
 step "번들 패키징"
 mkdir -p "${BUNDLE_DIR}/00-common"
@@ -446,9 +500,10 @@ else
 fi
 cp "${SCRIPT_DIR}/../00-common/common.sh" "${BUNDLE_DIR}/00-common/"
 cp -R "${SCRIPT_DIR}/../00-common/os"     "${BUNDLE_DIR}/00-common/"
-cp "${SCRIPT_DIR}/install.sh" "${SCRIPT_DIR}/istio-configure.sh" "${SCRIPT_DIR}/istio-lib.sh" "${BUNDLE_DIR}/"
+cp "${SCRIPT_DIR}/install.sh" "${SCRIPT_DIR}/istio-configure.sh" "${SCRIPT_DIR}/istio-lib.sh" \
+   "${SCRIPT_DIR}/feed-istio-to-harbor.sh" "${BUNDLE_DIR}/"
 cp "${SCRIPT_DIR}/README.md"  "${BUNDLE_DIR}/" 2>/dev/null || true
-chmod +x "${BUNDLE_DIR}/install.sh" "${BUNDLE_DIR}/istio-configure.sh"
+chmod +x "${BUNDLE_DIR}/install.sh" "${BUNDLE_DIR}/istio-configure.sh" "${BUNDLE_DIR}/feed-istio-to-harbor.sh"
 
 H="<HARBOR_HOSTNAME>/${ISTIO_HARBOR_PROJECT}"
 cat > "${BUNDLE_DIR}/BUNDLE-INFO" <<EOF
@@ -461,7 +516,13 @@ as_version    : ${UIPATH_AS_VERSION}
 istio         : ${ISTIO_VERSION} (이미지 태그 ${ISTIO_TAG}, AS ${UIPATH_AS_VERSION} 번들과 같음)
 charts        : ${ISTIO_BASE_CHART} / ${ISTIO_ISTIOD_CHART} / ${ISTIO_GATEWAY_CHART} ${ISTIO_CHART_VERSION},
                 ${UIPATH_ISTIO_CONFIGURE_CHART} ${UIPATH_ISTIO_CONFIGURE_VERSION}
-images        : 번들에 없음. hydrate 된 Harbor 에서 받는다(--source harbor, 기본).
+images        : images/ (skopeo dir 형식, 매니페스트·레이어 원본 그대로, $(du -sh "$IMAGE_DIR" | cut -f1))
+                ${ISTIO_PILOT_IMAGE%:*}@${ISTIO_PILOT_DIGEST}
+                ${ISTIO_PROXYV2_IMAGE%:*}@${ISTIO_PROXYV2_DIGEST}
+                ${UIPATH_WASM_IMAGE%:*}@${UIPATH_WASM_DIGEST}
+                ${UIPATH_ISTIO_CURL_IMAGE%:*}@${UIPATH_ISTIO_CURL_DIGEST}
+harbor 등록   : ./feed-istio-to-harbor.sh (없는 것만 올린다, --dry-run 으로 미리 본다)
+                또는 AS 번들의 hydrate-registry.sh(같은 경로·태그). install.sh 는 Harbor 에서 받기만 한다.
 harbor 경로   : ${H}/istio/pilot:${ISTIO_TAG}
                 ${H}/istio/proxyv2:${ISTIO_TAG}
                 ${H}/${UIPATH_WASM_IMAGE#*/}

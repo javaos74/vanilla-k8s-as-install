@@ -34,7 +34,7 @@ flowchart TD
     end
 
     subgraph Phase3["Phase 3: UiPath Automation Suite 설치"]
-        AS1["uipathctl 및 input.json 준비\n(Harbor, MinIO, DB 정보 기입,\nexclude_components · ingress)"] --> AS2["AS 오프라인 번들 hydrate\n(hydrate-registry.sh → Harbor uipath)"]
+        AS1["uipathctl 및 input.json 준비\n(Harbor, MinIO, DB 정보 기입,\nexclude_components · ingress)"] --> AS2["AS 오프라인 번들 hydrate\n(hydrate-registry.sh → Harbor uipath)\n또는 Istio 8개만 먼저:\n38-istio feed-istio-to-harbor.sh"]
         AS2 --> IS1["38-istio Istio 설치\n(base · istiod · ingressgateway,\nNodePort 고정)"]
         IS1 --> IS2["38-istio istio-configure\n(WASM 라우팅 플러그인)"]
         IS2 --> IS3["40-haproxy 재실행\n(NodePort 반영, 경유 판정)"]
@@ -67,7 +67,7 @@ flowchart TD
 | **Object Storage** | MinIO `RELEASE.2025-09-07` | Docker Compose (SNSD 단일 노드) | S3 호환, TLS 적용. AGPL-3.0, quay.io 이미지 401(2026-10-17) |
 | **Object Storage (대안)** | SeaweedFS **4.48** | Docker Compose (`weed server` 단일 노드) | Apache-2.0, S3 TLS 전용. 실서버에서 `install.sh` 판정 36/36 통과(4.3.1절). 사내 CA 인증서·브라우저 CORS 적용. AS 연계는 미검증. 판정 수정(`data_written`)을 더한 지금 코드는 미실행 |
 | **Registry** | Harbor **v2.15.2** | 공식 오프라인 인스톨러 + systemd | HTTPS(443) 전용, 자동 복구 스크립트 |
-| **Service Mesh (Istio)** | **1.30.3** (AS 2.2510.4 번들, Echo 재빌드 `1.30.3-20260730_echo`) / vendor/base·istiod·gateway **v1.30.3** | Helm 차트 (`38-istio`, hydrate 된 Harbor 경유) | UiPath 2.2510 [호환성 매트릭스](https://docs.uipath.com/automation-suite/automation-suite/2.2510/installation-guide-eks-aks/compatibility-matrix)와 AS 2.2510.4 번들의 버전. 이미지는 echohq.com 재빌드. [ISTIO-SECURITY-2026-006~009](https://istio.io/latest/news/security/) 수정은 upstream 1.30.8 에만 있고, Echo 재빌드 이미지에 2026-006~009 수정이 들어 있는지는 확인하지 못했습니다(미확인). 사용자가 이 위험을 알고 UiPath 배포 버전을 골랐습니다. 1.30 EOL 예정 2026-12경, k8s 1.32~1.36 지원([supported-releases](https://istio.io/latest/docs/releases/supported-releases/)). 다이제스트 고정. UiPath 래퍼 `helm/istiod` 대신 `vendor/istiod` 를 씁니다(렌더링 결과가 같음, 38-istio README 2.2절). `UIPATH_AS_VERSION` 을 바꾸면 Istio 값도 함께 바꿉니다(5.3.1절) |
+| **Service Mesh (Istio)** | **1.30.3** (AS 2.2510.4 번들, Echo 재빌드 `1.30.3-20260730_echo`) / vendor/base·istiod·gateway **v1.30.3** | Helm 차트 (`38-istio`, Harbor 경유: hydrate 또는 `feed-istio-to-harbor.sh`) | UiPath 2.2510 [호환성 매트릭스](https://docs.uipath.com/automation-suite/automation-suite/2.2510/installation-guide-eks-aks/compatibility-matrix)와 AS 2.2510.4 번들의 버전. 이미지는 echohq.com 재빌드. [ISTIO-SECURITY-2026-006~009](https://istio.io/latest/news/security/) 수정은 upstream 1.30.8 에만 있고, Echo 재빌드 이미지에 2026-006~009 수정이 들어 있는지는 확인하지 못했습니다(미확인). 사용자가 이 위험을 알고 UiPath 배포 버전을 골랐습니다. 1.30 EOL 예정 2026-12경, k8s 1.32~1.36 지원([supported-releases](https://istio.io/latest/docs/releases/supported-releases/)). 다이제스트 고정. UiPath 래퍼 `helm/istiod` 대신 `vendor/istiod` 를 씁니다(렌더링 결과가 같음, 38-istio README 2.2절). `UIPATH_AS_VERSION` 을 바꾸면 Istio 값도 함께 바꿉니다(5.3.1절) |
 | **L4 Load Balancer** | HAProxy **3.1** | Docker (`--network host`) | 80/443/15021 TCP 패스스루 |
 | **Database** | SQL Server 2022 (CU25/CU26) / PostgreSQL 16 | Docker 커스텀 이미지 / Docker Compose | MSSQL은 **Full-Text Search(FTS)** 내장 필수, PG는 TLS 적용 |
 | **Cache** | Redis OSS **7.4** | Docker Compose | TLS 활성화, 단일 노드 |
@@ -154,7 +154,7 @@ cd offline-install
 # ./00-common/build-in-container.sh 24.04 70-mssql
 # Ollama 임베딩 번들만 (호스트 Docker 로 빌드):
 # ./00-common/build-in-container.sh 24.04 85-ollama-embedding
-# Istio(38-istio) 번들만 (운영 번들, 이미지 없음):
+# Istio(38-istio) 번들만 (운영 번들, Istio 이미지·차트 8개 포함, 약 205MB):
 # ./00-common/build-in-container.sh 24.04 38-istio
 # 단일 노드 검증용 이미지 묶음까지 (--source local 용):
 # ISTIO_LOCAL_IMAGES=1 ./00-common/build-in-container.sh 24.04 38-istio
@@ -197,11 +197,11 @@ sha256sum -c nfs-csi-v4.13.4.tar.gz.sha256
 sha256sum -c harbor-v2.15.2.tar.gz.sha256
 sha256sum -c minio-RELEASE.*.tar.gz.sha256
 sha256sum -c seaweedfs-4.48.tar.gz.sha256      # SeaweedFS 를 쓰는 경우
-sha256sum -c istio-1.30.3.tar.gz.sha256        # 38-istio 운영 번들 (이미지 없음, 약 190KB)
+sha256sum -c istio-1.30.3.tar.gz.sha256        # 38-istio 운영 번들 (Istio 이미지·차트 8개 포함, 약 205MB)
 # sha256sum -c istio-local-images-1.30.3.tar.gz.sha256   # 단일 노드 검증(--source local)에만 씁니다
 ```
 
-`istio-local-images-1.30.3` 은 `ISTIO_LOCAL_IMAGES=1` 로 빌드할 때만 생기는 검증용 이미지 묶음(약 200MB)입니다. 운영과 다중 노드에서는 옮기지 않습니다. Istio 이미지는 5.2절 hydrate 로 Harbor 에 올라갑니다.
+`istio-local-images-1.30.3` 은 `ISTIO_LOCAL_IMAGES=1` 로 빌드할 때만 생기는 검증용 이미지 묶음(약 200MB)입니다. 운영과 다중 노드에서는 옮기지 않습니다. Istio 이미지는 5.2절 hydrate 로 Harbor 에 올라가거나, 운영 번들 `istio-1.30.3` 의 `feed-istio-to-harbor.sh` 로 올립니다(5.2.8절).
 
 ---
 
@@ -542,7 +542,8 @@ Istio 서비스 메시는 AS 설치기에 맡기지 않고 `38-istio` 로 직접
 
 1. `input.json` 작성: `exclude_components` 와 `ingress` 블록 포함 (5.1절)
 2. AS 오프라인 번들로 Harbor 채우기: `hydrate-registry.sh` (5.2절). Istio 이미지·차트도 이때 올라갑니다
-3. `38-istio` 번들 빌드·반입, hydrate 결과 확인 (5.3.1~5.3.2절)
+   - AS 전체 hydrate 전에 Istio 만 먼저 설치하거나 Harbor 를 새로 설치했으면 `38-istio` 번들의 `feed-istio-to-harbor.sh` 로 Istio 8개만 올립니다 (5.2.8절)
+3. `38-istio` 번들 빌드·반입, Harbor 등록 결과 확인 (5.3.1~5.3.2절)
 4. Istio 설치 `sudo ./install.sh` (5.3.3절)
 5. istio-configure `sudo ./istio-configure.sh` (5.3.4절)
 6. `40-haproxy` 재실행 → `38-istio` `install.sh --check-only` (5.3.5절)
@@ -650,6 +651,8 @@ Istio 서비스 메시는 AS 설치기에 맡기지 않고 `38-istio` 로 직접
 ### 5.2 AS 오프라인 번들로 Harbor 채우기 (hydrate-registry.sh)
 
 UiPath 오프라인 번들(`as-cmk-<버전>.tar.gz`)과 `hydrate-registry.sh` 로 AS 이미지와 Helm 차트를 Harbor 에 올립니다. UiPath 문서의 "Option B: Hydrating the registry with the offline bundle" 방식입니다. `38-istio` 가 쓰는 Istio 이미지·차트, istio-configure 차트, WASM·curl 이미지도 이 단계에서 함께 올라갑니다(5.2.6절 표).
+
+AS 전체 hydrate 를 하기 전에 Istio 만 먼저 설치하려면 5.2.8절의 `feed-istio-to-harbor.sh` 로 이 8개만 올립니다. 경로·태그가 같아 나중에 hydrate 를 해도 충돌하지 않습니다.
 
 - 기준 문서
   - https://docs.uipath.com/automation-suite/automation-suite/2.2510/installation-guide-eks-aks/configuring-the-oci-compliant-registry (Option B)
@@ -819,6 +822,33 @@ AS 파드와 Istio 사이드카는 어느 노드에도 뜹니다. worker 를 포
 cd offline-install/05-certs && ./deploy-certs.sh --nodes 'cp-node,worker-01,worker-02'
 ```
 
+#### 5.2.8 AS 전체 hydrate 전에 Istio 만 먼저 등록하기 (`38-istio` `feed-istio-to-harbor.sh`)
+
+AS 전체 hydrate(약 57GB) 없이 Istio 를 먼저 설치하거나, Harbor 를 새로 설치해 Istio 아티팩트가 없을 때 씁니다. `38-istio` 운영 번들(5.3.1절)에 Istio 아티팩트 8개(5.2.6절 표의 Istio 행: 이미지 4개, 차트 4개)가 들어 있고, 번들의 `feed-istio-to-harbor.sh` 가 그것을 Harbor 에 올립니다. 자세한 동작은 [38-istio README 4.2절](38-istio/README.md)에 있습니다.
+
+| 도구 | 어디서 | 하는 일 |
+|---|---|---|
+| `38-istio/build-bundle.sh` | 온라인 빌드 호스트 | registry.uipath.com 에서 8개를 다이제스트·sha256 핀으로 받아 번들에 넣습니다 |
+| `feed-istio-to-harbor.sh` | Harbor 에 닿는 아무 호스트(점프 박스, Harbor 호스트, control plane). 인터넷·kubeconfig·root 불필요 | Harbor 에 없는 것만 올립니다. 지우거나 덮어쓰지 않습니다 |
+| `install.sh`, `istio-configure.sh` | control plane | Harbor 에서 받아 설치만 합니다(5.3.3~5.3.4절) |
+
+```bash
+# 38-istio 번들을 푼 디렉터리에서(5.3.1절). sudo 없이 실행합니다.
+./feed-istio-to-harbor.sh --dry-run     # 올릴 목록·Harbor 경로·명령과 이 호스트의 도구 유무. Harbor 에 접속하지 않습니다
+./feed-istio-to-harbor.sh               # 계정·비밀번호를 프롬프트로 묻고(stdin), 없는 것만 올린 뒤 결과를 확인합니다
+./feed-istio-to-harbor.sh               # 다시 실행하면 8개 모두 "있음, 건너뜀" 이어야 합니다
+```
+
+- 대상은 `<HARBOR_HOSTNAME>/<ISTIO_HARBOR_PROJECT>`(기본 `uipath`)이고, 경로·태그는 hydrate(5.2.6절)와 같습니다. hydrate 를 먼저 했으면 모두 건너뜁니다.
+- `uipath` 프로젝트는 미리 있어야 합니다(5.2.3절 3). 이 도구는 프로젝트를 만들지 않습니다. 계정은 그 프로젝트에 push 권한이 있어야 합니다(robot 계정 권장).
+- 비밀번호는 stdin 으로만 받습니다. 터미널이 아니면 stdin 두 줄(계정, 비밀번호)을 읽습니다(`printf '%s\n' "$HU" "$HP" | ./feed-istio-to-harbor.sh`). 환경변수나 명령 인자로는 받지 않습니다.
+- CA 는 `install.sh` 와 같은 후보(`/etc/docker/certs.d/<host>/ca.crt` → `/etc/containerd/certs.d/<host>/ca.crt` → `/opt/pki/ca/ca.crt`)를 쓰고, 없으면 OS 신뢰 저장소로 검증합니다. 검증을 끄지 않습니다.
+- 필요한 명령은 `skopeo`, `helm`(3.8 이상), `curl` 등입니다. 하나라도 없으면 Harbor 에 접속하기 전에 멈춥니다. 10-k8s 노드에는 helm 이 있지만 skopeo 는 없을 수 있습니다. skopeo 는 OS 패키지로 설치하거나, skopeo 가 있고 Harbor 에 닿는 다른 호스트에서 실행합니다.
+- 결과 확인: 이미지는 Harbor API 의 태그와 다이제스트(이 도구가 올린 것은 `versions.env` 핀과 같습니다), 차트는 `helm pull --version` 후 tgz sha256 을 봅니다. 출력 끝이 `검증 결과: 통과 8 / 실패 0` 이어야 합니다. 확인 명령은 5.3.2절과 같습니다.
+
+> [!WARNING]
+> **`feed-istio-to-harbor.sh` 는 실제 Harbor 에서 아직 실행하지 않았습니다(미검증).** `bash -n`, `shellcheck`, 시험 번들의 `--dry-run` 과 사전 확인(Harbor `ping`·CA 검증까지)만 확인했습니다(38-istio README 4.6절).
+
 ---
 
 ### 5.3 Istio 서비스 메시 구성 ([`38-istio`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/38-istio/README.md))
@@ -826,7 +856,7 @@ cd offline-install/05-certs && ./deploy-certs.sh --nodes 'cp-node,worker-01,work
 AS 2.2510.4 번들에 들어 있는 Istio 1.30.3 을 AS 설치기 대신 `38-istio` 로 설치합니다. UiPath 문서([서비스 메시 설치·구성](https://docs.uipath.com/automation-suite/automation-suite/2.2510/installation-guide-eks-aks/installing-and-configuring-the-service-mesh))의 Step 1(Istio 설치)과 Step 2 Option A(istio-configure)에 해당하고, 참고 저장소([automation-suite-on-samsung-cloud-ske](https://github.com/javaos74/automation-suite-on-samsung-cloud-ske) `ko/05-istio-install.md`)처럼 helm 으로 base → istiod → ingressgateway 순서로 설치합니다.
 
 - ingressgateway 는 NodePort 로 고정하고, `40-haproxy` 가 호스트 80/443/15021 을 그 NodePort 로 넘깁니다.
-- 이미지와 차트는 5.2절 hydrate 가 Harbor 에 올린 것을 받습니다(`--source harbor`, 기본값).
+- 이미지와 차트는 Harbor 에서 받습니다(`--source harbor`, 기본값). Harbor 에는 5.2절 hydrate 또는 5.2.8절 `feed-istio-to-harbor.sh` 가 올립니다. `install.sh` 는 Harbor 에 올리지 않습니다.
 - 판정 항목·values 근거·트러블슈팅은 [`38-istio/README.md`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/38-istio/README.md), 검증 상태는 그 README 11절에 있습니다.
 
 > [!IMPORTANT]
@@ -838,14 +868,16 @@ AS 2.2510.4 번들에 들어 있는 Istio 1.30.3 을 AS 설치기 대신 `38-ist
 # 빌드 호스트(인터넷 O)
 cd offline-install
 ./00-common/verify-urls.sh                            # Istio 절: AS 2.2510.4 목록 대조 + 다이제스트·차트 태그
-./00-common/build-in-container.sh 24.04 38-istio      # bundle/istio-1.30.3.tar.gz (+ .sha256)
+./00-common/build-in-container.sh 24.04 38-istio      # bundle/istio-1.30.3.tar.gz (+ .sha256), 약 205MB
 
-# control plane 으로 옮긴 뒤
+# control plane 으로 옮긴 뒤 (5.2.8절 feed 를 다른 호스트에서 하면 그 호스트에도)
 sha256sum -c istio-1.30.3.tar.gz.sha256
 tar xzf istio-1.30.3.tar.gz && cd istio-1.30.3
 ```
 
-운영 번들에는 이미지가 없습니다(차트 4개, values, 스크립트). 단일 노드 검증용 이미지 묶음(`ISTIO_LOCAL_IMAGES=1`, `--source local`)은 운영에 쓰지 않습니다.
+운영 번들에는 Istio 이미지 4개(skopeo `dir` 형식, 다이제스트 그대로)와 차트 4개, values, 스크립트(`install.sh`, `istio-configure.sh`, `feed-istio-to-harbor.sh`)가 들어 있습니다. 이미지는 5.2.8절 `feed-istio-to-harbor.sh` 가 Harbor 에 올릴 때만 씁니다. 단일 노드 검증용 이미지 묶음(`ISTIO_LOCAL_IMAGES=1`, `--source local`)은 운영에 쓰지 않습니다.
+
+빌드 작업 사본의 `00-common/site.env`(`HARBOR_HOSTNAME`, `AS_FQDN` 등)가 번들에 들어갑니다. 빌드 전에 대상 사이트 값으로 채웁니다. 번들을 푼 뒤 고치면 `SHA256SUMS` 검증에서 멈춥니다.
 
 **AS 버전을 바꿀 때:** `versions.env` 의 `UIPATH_AS_VERSION`(현재 `2.2510.4`)을 바꾸면 같은 절의 Istio·istio-configure 값도 함께 바꿉니다. AS 버전마다 번들에 든 Istio 가 다릅니다.
 
@@ -859,9 +891,9 @@ tar xzf istio-1.30.3.tar.gz && cd istio-1.30.3
 
 그 다음 UiPath 래퍼 `helm/istiod:<ver>` 의 `values-air.yaml` 을 `38-istio` 의 istiod values 와 대조하고, `00-common/verify-urls.sh` 를 통과시킵니다. 대조 장치는 `verify-urls.sh` 의 Istio 절에 있습니다. 빌드에 넣지 않은 이유는 download.uipath.com 에 닿지 않는 빌드 호스트(egress 를 registry.uipath.com 으로 줄인 경우)에서도 빌드가 막히지 않게 하려는 것입니다. `build-bundle.sh` 도 차트 sha256 핀과 렌더링한 이미지 집합으로 어긋남을 잡습니다. 자세한 절차는 `versions.env` 의 Istio 절 주석과 38-istio README 2.3절에 있습니다.
 
-#### 5.3.2 hydrate 결과 확인
+#### 5.3.2 Harbor 등록 결과 확인 (hydrate 또는 feed)
 
-5.2절 hydrate 가 아래 8개를 Harbor 에 올렸는지 확인합니다. `38-istio` 에는 별도 Harbor 등록 단계가 없습니다. 8개 모두 hydrate 가 올리기 때문입니다.
+5.2절 hydrate 또는 5.2.8절 `feed-istio-to-harbor.sh` 가 아래 8개를 Harbor 에 올렸는지 확인합니다. 하나라도 없으면 `install.sh` 가 사전 확인에서 멈춥니다. 그때는 5.2.8절의 `feed-istio-to-harbor.sh` 로 없는 것만 올립니다.
 
 | 아티팩트 | Harbor 위치 (`ISTIO_HARBOR_PROJECT=uipath`) |
 |---|---|
@@ -894,7 +926,7 @@ unset HU HP
 `install.sh` 와 `istio-configure.sh` 는 설치 전에 같은 확인을 스스로 합니다. Harbor 이름 해석, CA(CA 파일이 있으면 containerd `hosts.toml` 도 요구, 없으면 OS 신뢰 저장소로 검증), `/api/v2.0/ping`, 프로젝트 public 여부, 이미지 존재(Harbor API), `crictl pull`, 차트 `helm pull` + sha256 대조 순서이고, 하나라도 실패하면 아무것도 바꾸지 않고 멈춥니다. Harbor 사본의 이미지 다이제스트는 원본과 다를 수 있어(5.2.5절 주의점 5) 이미지는 태그로 참조하고, 차트만 핀과 대조합니다. 차트 tgz sha256 이 다르면 번들 차트와 내용(`diff -r`)을 비교해 같을 때만 설치합니다(38-istio README 4.3절).
 
 > [!WARNING]
-> **실제 Harbor 등록(hydrate 실행, push)은 미검증입니다.** `--source harbor` 설치 경로(Harbor API 조회, `crictl pull`, `helm registry login` + `helm pull`, 차트 대조, pull secret)는 as2510-vanilla 의 기존 Harbor(private 프로젝트, CA 는 OS 신뢰 저장소)에서 실기로 확인했습니다(5.3.7절). CA 파일을 쓰는 경로(`/etc/containerd/certs.d/<host>/hosts.toml` 요구, `--cacert`/`--ca-file`)는 실행되지 않았고 `bash -n`, `shellcheck`, `--dry-run` 으로만 확인했습니다.
+> **실제 Harbor 등록(hydrate 실행, `feed-istio-to-harbor.sh` 실행)은 미검증입니다.** `--source harbor` 설치 경로(Harbor API 조회, `crictl pull`, `helm registry login` + `helm pull`, 차트 대조, pull secret)는 as2510-vanilla 의 기존 Harbor(private 프로젝트, CA 는 OS 신뢰 저장소)에서 실기로 확인했습니다(5.3.7절). CA 파일을 쓰는 경로(`/etc/containerd/certs.d/<host>/hosts.toml` 요구, `--cacert`/`--ca-file`)는 실행되지 않았고 `bash -n`, `shellcheck`, `--dry-run` 으로만 확인했습니다.
 
 #### 5.3.3 Istio 설치
 
@@ -966,7 +998,9 @@ kubectl -n istio-system describe secret istio-ingressgateway-certs | sed -n '/^D
 | `--source harbor` 설치 + 판정 | as2510-vanilla 3노드, 기존 Harbor (2026-11-09) | `install.sh` 27/0(HAProxy 경유 포함), `istio-configure.sh` 14/0. 이전 Istio 잔여물(CRD 15개 소유 annotation `base` → `istio-base`, 대상 없는 webhook 2개 삭제)을 손으로 정리한 뒤의 결과 |
 | HAProxy 경유 80/443/15021 | 두 환경 | 200. 443 은 사내 CA 로 검증 |
 | 재실행 멱등성 | as2510-vanilla | 기존 파드 UID·재시작 수 같음. 늘어난 gateway 파드는 HPA 확장 |
-| **실제 Harbor 등록(hydrate 실행, push)** | — | **미검증** |
+| **hydrate 실행** | — | **미검증** |
+| **`feed-istio-to-harbor.sh` 실제 등록** | asw3 새 Harbor(10.32.99.7) | **미검증**. `--dry-run` 과 사전 확인(Harbor `ping`·CA 검증까지)만 시험 번들로 확인 (2026-11-10) |
+| Harbor 재설치 뒤 재설치 | as2510-vanilla, Harbor asw2(10.32.99.6) → asw3(10.32.99.7) (2026-11-10) | **미실시**. 새 Harbor 에 8개가 없어 `install.sh` 가 사전 확인에서 멈췄습니다. 위 `--source harbor` 결과는 예전 Harbor(asw2) 기준입니다 |
 | AS 라우팅, 에어갭(`airgap-on.sh`) | — | **미검증 / 미실시** |
 | Harbor 중단·에어갭에서 gateway 기동(`imagePullPolicy: IfNotPresent`) | — | **미검증**. as2510-vanilla 에서 노드별 첫 gateway 파드는 이미지가 있는데도 Harbor 에서 다시 받았습니다(원인 미확인) |
 

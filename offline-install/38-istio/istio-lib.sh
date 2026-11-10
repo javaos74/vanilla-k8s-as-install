@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 #---------------------------------------------------------------------
-# 38-istio : install.sh / istio-configure.sh 공통 함수 (source 전용)
+# 38-istio : install.sh / istio-configure.sh / feed-istio-to-harbor.sh 공통 함수 (source 전용)
 #
 # 사용법: 00-common/common.sh 를 source 한 뒤
 #   source "${BUNDLE_ROOT}/istio-lib.sh"
-#   istio_parse_args "$@"
+#   istio_parse_args "$@"      (feed-istio-to-harbor.sh 는 자기 인자 처리를 쓴다)
 #
 # 이미지·차트 출처(--source):
-#   harbor (기본)  README 5.2 의 hydrate 가 Harbor 에 올린 경로에서 받는다.
+#   harbor (기본)  상위 README 5.2 의 hydrate 또는 이 번들의 feed-istio-to-harbor.sh 가
+#                  Harbor 에 올린 경로에서 받는다. 두 도구의 경로·태그는 같다.
 #                  이미지 <HARBOR_HOSTNAME>/<ISTIO_HARBOR_PROJECT>/<원본 경로>:<태그>
 #                  차트   oci://<HARBOR_HOSTNAME>/<ISTIO_HARBOR_PROJECT>/<차트 경로>
 #   local          단일 노드 검증 전용. 차트는 번들 charts/, 이미지는 검증용 묶음
@@ -184,6 +185,7 @@ hcurl() {   # Harbor API 호출. CA 검증을 끄지 않는다.
 
 # 자격증명이 필요한 Harbor API 호출. -u 로 넘기면 비밀번호가 프로세스 인자(ps)에 보이므로
 # curl 설정을 stdin(-K -)으로 넘긴다. printf 는 셸 내장이라 인자에 남지 않는다.
+# 계정은 PULL_USER/PULL_PASS 다(feed-istio-to-harbor.sh 에서는 stdin 으로 받은 push 계정).
 hcurl_auth() {
     local u="${PULL_USER//\\/\\\\}" p="${PULL_PASS//\\/\\\\}"
     u="${u//\"/\\\"}"; p="${p//\"/\\\"}"
@@ -242,17 +244,17 @@ harbor_preflight() {
         harbor_pull_creds \
             || die "프로젝트 ${PROJECT} 를 익명으로 읽을 수 없다(private 이거나 없음). HARBOR_PULL_USER/HARBOR_PULL_PASSWORD 를 줄 것."
         hcurl_auth "https://${HARBOR_HOST}/api/v2.0/projects/${PROJECT}" >/dev/null 2>&1 \
-            || die "프로젝트 ${PROJECT} 를 읽지 못했다(사용자 ${PULL_USER}). README 5.2 의 hydrate 와 프로젝트 이름(ISTIO_HARBOR_PROJECT)을 확인할 것."
+            || die "프로젝트 ${PROJECT} 를 읽지 못했다(사용자 ${PULL_USER}). 계정·비밀번호와 프로젝트 이름(ISTIO_HARBOR_PROJECT)을 확인할 것(상위 README 5.2.3)."
         ok "프로젝트 ${PROJECT} private — ${NS} 에 pull secret ${ISTIO_PULL_SECRET} 를 만든다 (사용자 ${PULL_USER})"
     fi
 }
 
-# hydrate 결과 확인: 저장소:태그 가 Harbor 에 있는가.
+# 등록 결과 확인(hydrate 또는 feed-istio-to-harbor.sh): 저장소:태그 가 Harbor 에 있는가.
 harbor_require_artifact() {   # $1=저장소 $2=태그
     local get=hcurl
     [[ "$HARBOR_PUBLIC" == "true" ]] || get=hcurl_auth
     "$get" "$(harbor_artifact_url "$1" "$2")" >/dev/null 2>&1 \
-        || die "Harbor 에 ${PROJECT}/${1}:${2} 가 없다. README 5.2 의 hydrate(hydrate-registry.sh)를 먼저 실행할 것."
+        || die "Harbor 에 ${PROJECT}/${1}:${2} 가 없다. 상위 README 5.2 의 hydrate(hydrate-registry.sh) 또는 이 번들의 feed-istio-to-harbor.sh(상위 README 5.2.8)를 먼저 실행할 것."
     ok "Harbor 에 있음: ${PROJECT}/${1}:${2}"
 }
 
@@ -265,7 +267,7 @@ harbor_cri_pull() {   # $1=이미지 ref
     # CRICTL_CREDS 로 넘긴다(crictl pull --help: [$CRICTL_CREDS]).
     [[ "$HARBOR_PUBLIC" == "true" ]] || creds="${PULL_USER}:${PULL_PASS}"
     CRICTL_CREDS="$creds" crictl --runtime-endpoint unix:///run/containerd/containerd.sock pull "$1" >/dev/null 2>&1 \
-        || die "containerd 가 ${1} 를 받지 못했다. 05-certs deploy-certs.sh --local 로 containerd 신뢰를 설정했는지, hydrate 가 끝났는지 확인할 것."
+        || die "containerd 가 ${1} 를 받지 못했다. 05-certs deploy-certs.sh --local 로 containerd 신뢰를 설정했는지, hydrate 또는 feed-istio-to-harbor.sh 가 끝났는지 확인할 것."
     ok "containerd 에서 Harbor pull 확인: ${1}"
 }
 
@@ -294,6 +296,20 @@ chart_content_same() {
     return 1
 }
 
+# helm 은 임시 --registry-config 파일에만 로그인한다(EXIT 때 지운다). 비밀번호는 stdin.
+# CA 파일이 없으면 --ca-file 을 빼서 OS 신뢰 저장소로 검증한다(HARBOR_CA 주석).
+# feed-istio-to-harbor.sh 의 helm push 도 이 파일을 쓴다.
+HELM_REGCFG=""
+harbor_helm_login() {
+    [[ -z "$HELM_REGCFG" ]] || return 0
+    local ca=()
+    [[ -z "$HARBOR_CA" ]] || ca=(--ca-file "$HARBOR_CA")
+    mktemp_tracked; HELM_REGCFG="$TMP_LAST"
+    printf '%s' "$PULL_PASS" | helm registry login "$HARBOR_HOST" ${ca[@]+"${ca[@]}"} \
+        --registry-config "$HELM_REGCFG" --username "$PULL_USER" --password-stdin >/dev/null 2>&1 \
+        || die "helm registry login ${HARBOR_HOST} 실패 (사용자 ${PULL_USER})"
+}
+
 # Harbor OCI 에서 차트를 받아 핀과 대조한다. 결과 경로는 PULLED_CHART(Harbor 에서 받은 tgz).
 #
 # 1) tgz sha256 이 versions.env 핀과 같으면 통과한다.
@@ -306,25 +322,19 @@ chart_content_same() {
 #   as2510-vanilla 의 Harbor 차트 4개는 tar 항목 시각이 push_time(2026-11-06 03:01)과 같아
 #   올리기 직전에 다시 패키징된 것이었다. 내용은 diff -r 로 핀 차트와 같았고 tgz sha256 만 달랐다.
 #   어떤 도구로 올렸는지는 확인하지 못했다.
-HELM_REGCFG=""
+#   feed-istio-to-harbor.sh 는 번들 tgz(= 핀)를 그대로 helm push 하므로 그 차트는 1) 에서 통과한다.
 harbor_chart_pull() {   # $1=OCI 경로(vendor/base) $2=버전 $3=sha256 핀
     local ref="$1" ver="$2" pin="$3" f got
-    # CA 파일이 없으면 --ca-file 을 빼서 OS 신뢰 저장소로 검증한다(HARBOR_CA 주석).
     local ca=()
     [[ -z "$HARBOR_CA" ]] || ca=(--ca-file "$HARBOR_CA")
     local args=(--version "$ver" ${ca[@]+"${ca[@]}"})
     if [[ "$HARBOR_PUBLIC" != "true" ]]; then
-        if [[ -z "$HELM_REGCFG" ]]; then
-            mktemp_tracked; HELM_REGCFG="$TMP_LAST"
-            printf '%s' "$PULL_PASS" | helm registry login "$HARBOR_HOST" ${ca[@]+"${ca[@]}"} \
-                --registry-config "$HELM_REGCFG" --username "$PULL_USER" --password-stdin >/dev/null 2>&1 \
-                || die "helm registry login ${HARBOR_HOST} 실패 (사용자 ${PULL_USER})"
-        fi
+        harbor_helm_login
         args+=(--registry-config "$HELM_REGCFG")
     fi
     mktemp_tracked -d
     helm pull "oci://${HARBOR_REGISTRY}/${ref}" "${args[@]}" -d "$TMP_LAST" >/dev/null 2>&1 \
-        || die "차트를 받지 못했다: oci://${HARBOR_REGISTRY}/${ref} ${ver}. README 5.2 의 hydrate 를 확인할 것."
+        || die "차트를 받지 못했다: oci://${HARBOR_REGISTRY}/${ref} ${ver}. hydrate 또는 feed-istio-to-harbor.sh 로 올렸는지 확인할 것."
     f="${TMP_LAST}/${ref##*/}-${ver}.tgz"
     [[ -f "$f" ]] || die "받은 차트 파일이 예상과 다르다: $(ls "$TMP_LAST")"
     got="$(sha256_of "$f")"

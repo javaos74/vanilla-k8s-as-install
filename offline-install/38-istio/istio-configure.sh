@@ -3,7 +3,7 @@
 # 38-istio : UiPath istio-configure (WASM 라우팅 플러그인 + EnvoyFilter) 설치
 #            (control plane 에서 root, install.sh 다음에 실행)
 #
-#   sudo ./istio-configure.sh                   # hydrate 된 Harbor 에서 (= --source harbor)
+#   sudo ./istio-configure.sh                   # Harbor 에서 (= --source harbor, hydrate 또는 feed-istio-to-harbor.sh)
 #   sudo ./istio-configure.sh --source local    # 단일 노드 검증: 번들 차트 + 검증용 이미지 묶음
 #   sudo ./istio-configure.sh --check-only      # 판정만
 #   sudo ./istio-configure.sh --uninstall       # 제거 (hook 리소스 포함)
@@ -28,7 +28,7 @@ IC_TGZ="$(bundle_chart "$UIPATH_ISTIO_CONFIGURE_CHART" "$UIPATH_ISTIO_CONFIGURE_
 PLUGIN="${UIPATH_AS_NAMESPACE}-istio-plugin-http"
 WASMPLUGIN="${UIPATH_AS_NAMESPACE}-routing-policy"
 PLUGIN_URL="http://${PLUGIN}.${NS}.svc/plugin-${UIPATH_ISTIO_CONFIGURE_VERSION}.wasm"
-# 레지스트리 호스트를 뗀 경로(hydrate 가 Harbor 프로젝트 아래에 그대로 둔다).
+# 레지스트리 호스트를 뗀 경로(hydrate 와 feed-istio-to-harbor.sh 가 Harbor 프로젝트 아래에 그대로 둔다).
 WASM_PATH="${UIPATH_WASM_IMAGE#*/}"          # istio-wasm-plugin:<UIPATH_WASM_TAG>
 CURL_PATH="${UIPATH_ISTIO_CURL_IMAGE#*/}"    # curlimages/curl:<UIPATH_ISTIO_CURL_TAG>
 ENVOYFILTERS=(uipath-asrobots-filter uipath-response-server-passthrough-filter

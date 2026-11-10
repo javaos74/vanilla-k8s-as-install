@@ -2,7 +2,7 @@
 #---------------------------------------------------------------------
 # 38-istio : Istio(base / istiod / ingressgateway) 설치 (control plane 에서 root)
 #
-#   sudo ./install.sh                     # hydrate 된 Harbor 에서 설치 (= --source harbor)
+#   sudo ./install.sh                     # Harbor 에서 설치 (= --source harbor)
 #   sudo ./install.sh --source local      # 단일 노드 검증: 번들 차트 + 검증용 이미지 묶음
 #   sudo ./install.sh --check-only        # 판정만 (출처는 배포된 istiod 이미지로 판별)
 #   sudo ./install.sh --uninstall         # 제거 (istio-configure.sh --uninstall 이 먼저)
@@ -12,8 +12,10 @@
 #   10-k8s + 60-cilium 설치 완료(노드 Ready)
 #   TLS 원본 ${ISTIO_TLS_CERT_DIR:-/opt/pki/as}/{fullchain.crt,tls.key,ca.crt}
 #     (05-certs deploy-certs.sh --local 이 배치한다. 다른 곳이면 ISTIO_TLS_CERT_DIR)
-#   --source harbor: README 5.2 의 hydrate 로 Harbor 에 Istio 이미지·차트가 올라가 있고,
-#     이 노드가 Harbor 이름을 해석하고 CA 를 신뢰한다(05-certs deploy-certs.sh --local).
+#   --source harbor: Harbor 에 Istio 이미지·차트가 올라가 있고(상위 README 5.2 의 hydrate,
+#     또는 이 번들의 feed-istio-to-harbor.sh, 상위 README 5.2.8), 이 노드가 Harbor 이름을
+#     해석하고 CA 를 신뢰한다(05-certs deploy-certs.sh --local).
+#     이 스크립트는 Harbor 에 아무것도 올리지 않는다. 받아서 설치만 한다.
 #
 # 설치하는 것(네임스페이스 istio-system):
 #   helm 릴리스 istio-base (vendor/base) / istiod (vendor/istiod) / istio-ingressgateway (vendor/gateway)

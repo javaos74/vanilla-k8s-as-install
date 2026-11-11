@@ -360,7 +360,11 @@ sudo ./install.sh --test-restart
 | 자동 복구 `--test-restart` | **통과** (두 컨테이너 PID kill -9 → `RestartCount 0 -> 1`, docker 데몬 재시작 후 200) |
 | GPU 번들 설치 (드라이버 없는 VM) | 사전 확인에서 **중단**(rc=1), 이미지·`/opt/ollama-embedding`·컨테이너 변화 없음, 기존 CPU 배포 200 유지 |
 | GPU compose 렌더링 | Compose 5.5.1 이 `gpus: all` → `count: -1` 로 수용 |
-| **GPU(CUDA) 실행 경로** | **미검증** — 드라이버·nvidia-container-toolkit 이 없는 VM 이다. 판정의 GPU 2항목(`nvidia-smi -L`, `ollama ps` 의 GPU)도 실행되지 않았다 |
+| GPU(CUDA) 실행 경로 (이 VM) | 이 VM 에서는 미검증 — 드라이버·nvidia-container-toolkit 이 없다. 아래 2026-11-11 행에서 다른 호스트로 검증했다 |
+| **GPU 번들 설치 (Tesla T4 16GB, 2026-11-11)** | **통과 24/24.** g4dn.2xlarge, Ubuntu 24.04.5, 커널 7.0.0-1014-aws, 드라이버 595.99.02(open, Ubuntu prebuilt 모듈), toolkit 1.20.1-1, Docker 29.8.1. 같은 커밋으로 그 호스트에서 다시 빌드한 번들을 썼다(모델 digest `9704fd98…` = 핀). `ollama ps` = `100% GPU`(9.1 GB, 37/37 레이어), VRAM 8805/15360 MiB. `--check-only`·재설치 멱등, `--test-restart` 통과, 재부팅 뒤 자동 기동과 GPU 재적재 확인 |
+| GPU 응답 시간 (T4, 같은 Q8_0 을 CPU 8 vCPU 로 돌린 것과 비교) | 4토큰 0.045초 (CPU 0.31초), 633토큰 0.49초 (CPU 39.9초). 컨테이너를 만든 뒤 처음 들어오는 긴 입력은 CUDA JIT 로 25.6초 걸렸고, 그 뒤로는 다시 생기지 않았다 |
+| GPU 번들 설치 (Quadro RTX 4000 Max-Q 8GB, 2026-11-11) | 통과 24/0. 다만 모델이 `28%/72% CPU/GPU` 혼합으로 적재됐다. 판정(`ollama_on_gpu`)은 혼합 적재도 통과시키므로 `100% GPU` 와 구분하지 못한다. VRAM 12GB 이상 권고(4.2절)와 맞는 결과다 |
+| **GPU 사전 준비의 오프라인 설치** | **미검증.** 위 두 호스트 모두 드라이버·toolkit·Docker 를 인터넷으로 설치했다. 드라이버·toolkit 을 오프라인 번들에 넣는 준비는 아직 없다. 드라이버는 커널 버전에 묶인다(Ubuntu 기본 경로 `ubuntu-drivers install` 은 최신 커널을 함께 설치한다. 커널을 고정하려면 `linux-modules-nvidia-595-open-$(uname -r)` 와 버전을 지정한 flavour 메타를 함께 설치한다) |
 
 ```
 === 검증 결과: 통과 22 / 실패 0 ===

@@ -455,7 +455,7 @@ sudo ./install.sh --test-restart
 | **GPU 번들 설치 (Tesla T4 16GB, 2026-11-11)** | **통과 24/24.** g4dn.2xlarge, Ubuntu 24.04.5, 커널 7.0.0-1014-aws, 드라이버 595.99.02(open, Ubuntu prebuilt 모듈), toolkit 1.20.1-1, Docker 29.8.1. 같은 커밋으로 그 호스트에서 다시 빌드한 번들을 썼다(모델 digest `9704fd98…` = 핀). `ollama ps` = `100% GPU`(9.1 GB, 37/37 레이어), VRAM 8805/15360 MiB. `--check-only`·재설치 멱등, `--test-restart` 통과, 재부팅 뒤 자동 기동과 GPU 재적재 확인 |
 | GPU 응답 시간 (T4, 같은 Q8_0 을 CPU 8 vCPU 로 돌린 것과 비교) | 4토큰 0.045초 (CPU 0.31초), 633토큰 0.49초 (CPU 39.9초). 컨테이너를 만든 뒤 처음 들어오는 긴 입력은 CUDA JIT 로 25.6초 걸렸고, 그 뒤로는 다시 생기지 않았다 |
 | GPU 번들 설치 (Quadro RTX 4000 Max-Q 8GB, 2026-11-11) | 통과 24/0. 다만 모델이 `28%/72% CPU/GPU` 혼합으로 적재됐다. 판정(`ollama_on_gpu`)은 혼합 적재도 통과시키므로 `100% GPU` 와 구분하지 못한다. VRAM 12GB 이상 권고(4.2절)와 맞는 결과다 |
-| **GPU 사전 준비의 오프라인 설치** | **미검증(실기 검증 전).** 번들과 설치 도구는 3절 "GPU 사전 준비 번들"과 4.2절에 있다. 위 두 호스트는 드라이버·toolkit·Docker 를 인터넷으로 설치했다 |
+| **GPU 사전 준비의 오프라인 설치 (Tesla T4, 2026-11-11)** | **통과.** 드라이버·toolkit·Docker 가 없는 새 g4dn.2xlarge(Ubuntu 24.04.5, 커널 7.0.0-1014-aws, nouveau 적재, Secure Boot 꺼짐)에서 했다. 번들 `ollama-embedding-gpu-prep-noble-7.0.0-1014-aws.tar.gz` 은 522,316,270 B, sha256 `49a42cde…`, deb 170개 498.5MiB 다. 번들은 요약 로그 문구를 고치기 전과 뒤에 두 번 빌드했고 deb 170개와 `Packages` 의 해시는 같다. 첫 설치는 고치기 전 번들로, 재실행과 판정은 고친 뒤 번들로 했다. `--dry-run` 과 설치 모두 새로 설치 79 / 업그레이드 0 / 제거 0 / 커널·dkms 0 이고, 설치 직후 판정은 15/15 다. 재부팅 뒤 `nvidia-smi` 에 Tesla T4 와 595.99.02 가 보이고 docker 런타임에 `nvidia` 가 있으며 `--check-only` 는 19/19 다. 재실행은 apt 설치 0, 런타임 "변경 없음", docker 재시작 없음이다. 이어서 GPU 번들 `install.sh` 24/24, `ollama ps` = `100% GPU`(9.1 GB), VRAM 8805/15360 MiB, `--check-only` 2회 결과 같음, `--test-restart` 통과, 재부팅 뒤 자동 기동과 GPU 재적재를 확인했다. 커널은 바뀌지 않았다(`uname -r` 과 `/boot/vmlinuz-*` 가 같고, 커널 패키지는 `linux-modules-nvidia-595-open-*` 2개만 늘었다). 가짜 `uname`(-r = 6.8.0-147-generic)으로는 `--dry-run` 과 설치 모두 `커널이 번들과 다르다` 로 rc=1 이고 dpkg 목록이 그대로다. 증거는 이 절 끝 |
 
 ```
 === 검증 결과: 통과 22 / 실패 0 ===
@@ -479,6 +479,23 @@ ollama: "inference compute" id=cpu library=cpu ... total="125.4 GiB"
    빌드 시 `nginx -t` 를 39자 키로 하도록 바꿨다. 샘플 nginx 설정은 바꾸지 않았다(5절).
 2. **nginx 기동 실패 원인이 보이지 않았다.** `docker exec` 가 "is restarting" 으로만 실패했다. 기동 단계에서 nginx 가
    안정적으로 떠 있는지 먼저 보고, 아니면 nginx 로그를 출력하고 중단하도록 했다.
+
+GPU 사전 준비 오프라인 증거(2026-11-11 T4, 호스트 방화벽을 바꾸지 않고 확인, D14):
+
+1. apt 원본은 번들 `file:` 저장소 하나다(`Dir::Etc::sourceparts=/dev/null`, 임시 목록 디렉터리). `/var/log/apt/history.log` 의 Commandline 에 이 옵션이 남았다
+2. 설치를 `strace -f --seccomp-bpf -e trace=connect` 로 감싸 프로세스 트리의 `connect()` 를 기록했다. `AF_INET`·`AF_INET6` 0건, 이름 해석 소켓 `io.systemd.Resolve` 0건이다. 나머지는 `AF_UNIX` 495건(nscd, systemd, dbus, `/var/run/docker.sock` 등)이다
+3. `/var/cache/apt/archives/*.deb` 는 설치 전후 모두 0개다
+4. 새로 생긴 패키지 79개의 버전이 모두 번들 `conf/packages.list` 와 같다. 지워진 패키지 0, 버전이 바뀐 패키지 0
+5. 증거의 범위는 설치 프로세스 트리다. 번들 저장소로 `apt-get update` 를 할 때 호스트의 apt 훅(`/etc/apt/apt.conf.d/20apt-esm-hook.conf`)이 systemd 로 `apt-news.service`·`esm-cache.service` 를 띄운다. 이 둘은 트리 밖이고, 인터넷이 되는 검증 인스턴스에서 esm-cache 가 Canonical 서버에 접속해 503 을 받았다. 설치는 이 서비스에 의존하지 않는다
+6. 번들 deb 170개 가운데 79개(477.9MiB)가 설치됐다. 16개는 같은 버전이 이미 있었고, `git`·`git-man` 은 설치된 7.3 을 그대로 뒀다. 73개는 `nvidia-settings`(GUI) Recommends 묶음이라 설치되지 않았다. 이 이미지에는 `python3-xkit` 이 없기 때문이다(4.2절)
+
+GPU 사전 준비 검증 중 고친 것:
+
+1. **`verify-urls.sh` 가 있는 패키지를 FAIL 로 보고했다.** `libnvidia-container-tools 1.20.1-1` 이 5번 중 5번 FAIL 이었다.
+   Packages 색인을 `grep -q` 로 파이프에서 바로 찾으면, 첫 일치에서 grep 이 끝날 때 아직 쓰던 `paste` 가 SIGPIPE(141)로 죽는다.
+   그러면 pipefail 때문에 결과가 "없음"이 된다. 색인을 변수에 담은 뒤 찾도록 고쳤다(`common.sh` `ctr_missing_images` 와 같은 방식).
+2. **재부팅 전 요약 줄에 오류 문구가 드라이버 버전으로 찍혔다.** `nvidia-smi` 는 드라이버와 통신하지 못하면 오류를 stdout 에 쓴다.
+   성공했을 때만 값을 쓰도록 고쳤다(재부팅 전에는 `?`). 판정과 종료코드는 그대로다.
 
 ---
 

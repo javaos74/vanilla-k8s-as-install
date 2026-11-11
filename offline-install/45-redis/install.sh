@@ -25,7 +25,7 @@ REDIS_HOST_IP="${REDIS_HOST_IP:-$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{pr
 [[ -n "$REDIS_HOST_IP" ]] || REDIS_HOST_IP="$(hostname -I | awk '{print $1}')"
 COMPOSE_FILE="${REDIS_DIR}/docker-compose.yml"
 REDIS_CONF="${REDIS_DIR}/redis.conf"
-CONTAINER=redis
+CONTAINER=redis4as
 
 dc() { docker compose -f "$COMPOSE_FILE" "$@"; }
 redisq() {

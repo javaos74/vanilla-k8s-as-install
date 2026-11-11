@@ -49,7 +49,7 @@ cat > "${CONF_DIR}/docker-compose.yml.tmpl" <<'EOF'
 services:
   redis:
     image: __REDIS_IMAGE__
-    container_name: redis
+    container_name: redis4as
     restart: unless-stopped
     ports:
       - "__REDIS_BIND_IP__:__REDIS_PORT__:6379"

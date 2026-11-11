@@ -391,6 +391,8 @@ CA:
   - `install.sh`(4.5절 stdin 방식): 통과 27 / 실패 0(HAProxy 경유 포함). CA 파일 경로(`/etc/docker/certs.d/harbor.myrobots.co.kr/ca.crt` + containerd `hosts.toml`)를 처음 실기로 실행했다. pull secret 은 자격증명이 같아 바뀌지 않았다(resourceVersion 같음).
   - `istio-configure.sh`: 통과 14 / 실패 0. wasm·curl `crictl pull`, 차트 내용 = 핀. hook Job 파드가 asw 에서 curl 을 새 Harbor 에서 받았다.
   - `install.sh --check-only` 27/0, `istio-configure.sh --check-only` 14/0. HAProxy 경유 `127.0.0.1`·`10.32.99.3` 의 80/443/15021 이 smoke 동안 200 이다.
+- 같은 날 09:48 UTC 에 이 번들 이전 판(`~/as/istio-1.30.3`, feed 추가 전 빌드)으로 자격증명 없이 `sudo ./install.sh` 가 한 번 더 실행됐다. 4.5절 2번 경로로 번들 `site.env` 의 `HARBOR_ADMIN_PASSWORD` 를 써서 pull secret 이 **admin** 계정으로 바뀌었다(Harbor API 로 유효한 관리자 자격증명임을 확인). 설치 자체는 통과했고 파드는 바뀌지 않았다. 4.5절대로 pull 전용 계정으로 다시 실행해 바꾼다. 이 작업에서는 바꾸지 않았다.
+- 재확인(2026-11-11 01:25 UTC, 읽기 전용): 노드 2개 Ready, istiod·gateway·plugin-http Running(재시작 0, imageID 가 새 Harbor 의 핀 다이제스트), `install.sh --check-only` 27/0, `istio-configure.sh --check-only` 14/0, HAProxy 경유 80/443/15021 이 smoke 동안 200.
 - 아직 실기로 실행되지 않은 것: feed 의 `helm push`(차트 4개가 이미 있었다), hydrate 실행, 에어갭.
 
 **2026-11-09 (예전 Harbor asw2)**

@@ -220,7 +220,7 @@ gpu_preflight() {
     command -v nvidia-container-runtime-hook >/dev/null 2>&1 || command -v nvidia-ctk >/dev/null 2>&1 \
         || missing+=("nvidia-container-toolkit(nvidia-container-runtime-hook / nvidia-ctk)")
     if ((${#missing[@]} > 0)); then
-        die "GPU 번들 사전 조건이 없다: ${missing[*]}. README 4절대로 드라이버·toolkit 을 먼저 설치하거나 CPU 번들을 쓸 것. 아무것도 바꾸지 않았다."
+        die "GPU 번들 사전 조건이 없다: ${missing[*]}. README 4.2절의 GPU 사전 준비 번들(install-gpu-prep.sh)로 드라이버·toolkit 을 먼저 설치하거나 CPU 번들을 쓸 것. 아무것도 바꾸지 않았다."
     fi
     ok "GPU 사전 조건: $(head -n 1 <<<"$gpus")"
 }

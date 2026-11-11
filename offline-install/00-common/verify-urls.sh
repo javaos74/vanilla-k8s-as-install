@@ -194,4 +194,12 @@ check "CPU 모델 ${OLLAMA_EMBED_CPU_MODEL} 매니페스트 = 핀" \
 check "GPU 모델 ${OLLAMA_EMBED_GPU_MODEL} 매니페스트 = 핀" \
     ollama_manifest_ok "$OLLAMA_EMBED_GPU_MODEL" "$OLLAMA_EMBED_GPU_MODEL_DIGEST"
 
+step "NVIDIA GPU 사전 준비 (85-ollama-embedding)"
+# 드라이버·커널 모듈은 커널별이라 build-gpu-prep.sh 가 빌드 때 확인한다.
+for pkg in nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1; do
+    check "${pkg} ${NVIDIA_CTK_VERSION}" \
+        apt_pkg_ok "${NVIDIA_CTK_REPO}/${BUNDLE_ARCH}/Packages" "$pkg" "$NVIDIA_CTK_VERSION"
+done
+check "nvidia-container-toolkit apt 서명키" http_ok "$NVIDIA_CTK_KEY_URL"
+
 check_summary

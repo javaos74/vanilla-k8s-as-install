@@ -65,11 +65,15 @@ image_ok() {
 #--- apt 저장소 안의 특정 패키지 버전 ----------------------------------
 # Packages 파일을 받아 Package/Version 조합이 실제로 있는지 본다.
 # URL HEAD 만으로는 "저장소는 있지만 그 버전은 없다"를 못 잡는다.
+# 색인을 한 번 변수에 담아 파이프를 없앤다(common.sh ctr_missing_images 와 같은 이유).
+# `... | paste - - | grep -qF` 로 쓰면 grep -q 가 첫 일치에서 끝나고, 아직 쓰던 paste 가
+# SIGPIPE(141)로 죽어 pipefail 때문에 "없음"이 된다. 목록 앞쪽 패키지에서만 생긴다
+# (실측 2026-11-11: NVIDIA Packages 184KB 에서 libnvidia-container-tools 만 5/5 오탐).
 apt_pkg_ok() {
-    local packages_url="$1" pkg="$2" ver="$3"
-    curl -sL --max-time 60 "$packages_url" 2>/dev/null \
-        | grep -E '^(Package|Version):' | paste - - \
-        | grep -qF "Package: ${pkg}	Version: ${ver}"
+    local packages_url="$1" pkg="$2" ver="$3" idx
+    idx="$(curl -sL --max-time 60 "$packages_url" 2>/dev/null \
+        | grep -E '^(Package|Version):' | paste - -)" || return 1
+    grep -qF "Package: ${pkg}	Version: ${ver}" <<<"$idx"
 }
 
 deb_url() {   # $1=codename  $2=deb 파일명

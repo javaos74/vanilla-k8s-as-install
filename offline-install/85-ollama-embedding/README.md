@@ -12,7 +12,7 @@ k8s 는 쓰지 않는다. UiPath AS 설치와 무관한 **선택 컴포넌트**�
 | `cpu` | `ollama-qwen3-embedding:0.40.13-cpu` | `qwen3-embedding:8b` | Q4_K_M (4.7GB) | GPU 없는 VM |
 | `gpu` | `ollama-qwen3-embedding:0.40.13-gpu` | `qwen3-embedding:8b-q8_0` | Q8_0 (8.0GB) | NVIDIA GPU VM |
 
-검증 상태는 10절에 있다. **GPU(CUDA) 경로는 실기 검증하지 않았다.**
+검증 상태는 10절에 있다. GPU 호스트의 드라이버·toolkit·Docker 는 GPU 사전 준비 번들(4.2절)로 오프라인 설치한다.
 
 ---
 
@@ -35,6 +35,8 @@ k8s 는 쓰지 않는다. UiPath AS 설치와 무관한 **선택 컴포넌트**�
 | `conf/docker-compose.yml.tmpl` | `install.sh` 가 `__PLACEHOLDER__` 를 치환해 `/opt/ollama-embedding/docker-compose.yml` 로 설치한다 |
 | `build-bundle.sh` | 온라인 빌드 호스트: 이미지 빌드·검증, `docker save`, 번들 |
 | `install.sh` | 에어갭 VM: 적재·키·설정·기동·판정, 자동 복구 검증, 제거 |
+| `build-gpu-prep.sh` | 온라인 빌드 호스트: 대상 커널용 드라이버·toolkit·Docker deb 수집, flat apt 저장소, GPU 사전 준비 번들 |
+| `install-gpu-prep.sh` | GPU VM: 사전 확인, 번들 저장소만 쓰는 apt 설치, nvidia 런타임 등록, 판정 |
 
 설치 결과:
 
@@ -57,7 +59,7 @@ compose 프로젝트 ollama-embedding / 네트워크 ollama-embedding_frontend, 
 | D1'' | 모델 고정 | 태그로 `ollama pull` 한 뒤 `ollama list` ID 가 핀한 매니페스트 다이제스트 앞 12자리와 다르면 빌드 실패. `verify-urls.sh` 가 레지스트리 매니페스트 sha256 을 핀과 대조한다 | `ollama pull` 은 다이제스트 지정을 지원하지 않는다. 태그가 다른 가중치로 바뀌면 조용히 다른 모델이 들어가므로 빌드 시점에 끊는다 |
 | D2 | 빌드 머신 | **인터넷이 되는 Linux x86_64 + Docker Engine(buildx) 호스트.** macOS 는 지원하지 않는다 | 사용자 로컬은 Apple Silicon(arm64)이다. amd64 이미지를 에뮬레이션으로 빌드하면 `RUN` 안의 `ollama serve`/`pull` 이 느리고 동작을 보장할 수 없다. 8~11GB tar 를 다시 VM 으로 옮겨야 하고, 기존 빌드 스크립트도 GNU 도구를 가정한다. podman 빌드 컨테이너 안에는 docker 데몬이 없어 `docker build` 를 못 한다. 그래서 `build-in-container.sh` 는 이 단계를 컨테이너가 아니라 호스트 Docker 로 `build-bundle.sh` 를 실행한다(3절, 2026-11-06 변경. 70-mssql 도 FTS 포함 확인 때문에 같은 방식이다) |
 | D3 | 컨테이너 런타임 | **Docker Engine + Compose 플러그인 v2.30 이상** | 저장소의 compose 컴포넌트(redis·pg·mssql·minio)가 모두 `docker compose` 이고 10-k8s 번들이 Docker 를 설치한다. NVIDIA 의 표준 경로가 Docker `--gpus` / compose `gpus:`(v2.30+)다. Podman 은 GPU 에 CDI 생성과 별도 compose 도구가 필요하다 |
-| D3' | 엔진·NVIDIA toolkit 번들 포함 | **포함하지 않는다.** Docker 는 전제 조건, GPU 는 드라이버 + toolkit 을 미리 설치(4.2절에 오프라인 준비 방법) | 엔진 deb 는 OS 버전별이고 10-k8s 가 이미 관리한다. 드라이버는 커널 버전에 묶이고 재부팅이 필요한 호스트 수준 변경이다 |
+| D3' | 엔진·NVIDIA 드라이버·toolkit 번들 포함 | **엔진은 GPU 사전 준비 번들에 포함하고, 없을 때만 설치한다.** NVIDIA 드라이버·toolkit 도 같은 번들에 넣는다(대상 커널별, 4.2절). CPU 번들은 Docker 를 전제로 둔다(10-k8s 번들 또는 사내 저장소) | 85 는 k8s 와 무관한 단독 VM 이고, 10-k8s 설치기에는 Docker 만 설치하는 모드가 없다(swap·sysctl·containerd `config.toml` 까지 바꾼다). 버전 핀은 `versions.env` 하나라 10-k8s 와 갈리지 않는다. Docker 엔진이나 containerd 패키지가 이미 있으면 그대로 둬서 10-k8s 노드와 기존 Docker 호스트를 건드리지 않는다. 2026-11-11 사용자 결정(이전 결정은 "포함하지 않는다") |
 | D4 | CPU/GPU 선택 | **빌드 시 flavor 별 번들을 따로 만든다.** 설치는 하드웨어에 맞는 번들 하나를 반입해 `sudo ./install.sh` 만 실행한다. GPU 번들은 GPU 사전 조건이 없으면 아무것도 바꾸기 전에 중단한다. 자동 감지로 이미지를 바꾸지 않는다 | 두 이미지 tar 합계가 약 20GB 라 한 현장에 둘 다 싣는 것은 낭비다. 번들이 곧 선택이므로 결과가 결정적이다. 사전 확인이 없으면 docker 가 `could not select device driver "nvidia"` 로 늦게 실패한다 |
 | D5 | nginx TLS | **적용하지 않는다.** 샘플대로 HTTP `listen 80` | 사용자가 동의한 nginx 변경은 세 가지(키 1개, 서비스 이름, 키 외부 주입)뿐이다. TLS 는 인증서 배포·클라이언트 CA 신뢰까지 바꾸는 별도 작업이다(7절) |
 | D6 | API 키 주입·보관 | 기존 env 파일 > `OLLAMA_EMBED_API_KEY` > 자동 생성. 원본은 env 파일(0600), nginx 는 파생 map 파일을 디렉터리 마운트로 읽는다(5절) | 키가 git·이미지·컨테이너 Env(`docker inspect`)에 남지 않는다. envsubst 템플릿 방식은 키가 컨테이너 Env 에 보인다 |
@@ -65,8 +67,12 @@ compose 프로젝트 ollama-embedding / 네트워크 ollama-embedding_frontend, 
 | D8 | 호스트 포트 | 컨테이너 80, 호스트 `OLLAMA_EMBED_PORT`(기본 80). **11434 는 호스트에 공개하지 않는다** | 11434 를 열면 키 검사를 우회할 수 있다 |
 | D9 | 오프라인 증명 | compose `pull_policy: never` + ollama 를 `internal: true` 네트워크에만 연결 + 설치 전 빌드 이미지·빌드 캐시를 지우고 번들 tar 로만 적재 + 설치 이후 `docker events` 와 dockerd·containerd 로그에 이 작업의 pull 없음 + 컨테이너 외부 TCP 연결 실패 판정 | `90-verify/airgap-on.sh` 는 호스트 전체 방화벽을 바꾼다. 공유 VM 을 바꾸지 않고 "이미지·모델을 인터넷에서 받지 않았다"를 직접 보인다 |
 | D10 | 이미지 이름 | 레지스트리에 올리지 않는 로컬 이미지 `ollama-qwen3-embedding:<버전>-<flavor>`. Dockerfile 은 하나(ARG `EMBED_MODEL`, `EMBED_MODEL_ID`) | 두 이미지의 차이는 모델 태그뿐이라 Dockerfile 을 나누면 내용이 갈라질 위험만 생긴다 |
+| D11 | GPU 사전 준비 번들 형태 (2026-11-11) | GPU Ollama 번들과 **따로 만든다.** `build-gpu-prep.sh` 가 `bundle/ollama-embedding-gpu-prep-<코드네임>-<커널>.tar.gz` 를 만들고, 번들의 `install-gpu-prep.sh` 가 사전 확인·설치·nvidia 런타임 등록·판정을 맡는다. 재부팅은 안내만 한다. Ollama `install.sh` 에는 호스트 수준 변경을 넣지 않는다 | 수명주기가 다르다. 사전 준비 번들은 커널에 묶여 커널마다 다시 만들고(약 0.5GB), Ollama GPU 번들(10.4GiB)은 커널과 무관하다. 사전 준비는 재부팅이 따르는 호스트 수준 변경이고, 드라이버가 이미 있는 호스트(asw)에는 필요 없다. 빌드에 Docker 가 필요 없다 |
+| D12 | 커널 고정 (2026-11-11) | 대상 커널은 빌드 옵션 `--kernel`(기본: 빌드 호스트의 `uname -r`)로 정하고 번들 이름과 `conf/target-kernel` 에 기록한다. 대상 노드의 커널이 다르면 `install-gpu-prep.sh` 가 아무것도 바꾸기 전에 멈춘다. DKMS 대체 경로는 두지 않는다. 드라이버는 Ubuntu prebuilt 모듈 `linux-modules-nvidia-595-open-<커널>` 과 **같은 버전**의 flavour 메타(`linux-modules-nvidia-595-open-aws` 등)로 설치한다 | prebuilt 모듈은 커널 ABI 마다 다른 패키지다. 메타를 빼면 `nvidia-dkms` 로 풀려 gcc·헤더·dkms 가 들어오고, 메타 버전을 지정하지 않으면 최신 커널(7.0.0-1017)이 함께 들어온다(2026-11-11 실측). DKMS 모듈은 Canonical 키로 서명되지 않는다(Secure Boot). 커널은 노드마다 달라 `site.env` 값으로 두지 않는다. 아카이브는 포켓마다 최신 버전만 남기므로 그 커널용 메타가 빠지면 그 커널용 번들은 더 만들 수 없다(2026-11-11 기준 7.0.0-1014-aws 용 메타는 noble-security 에만 있다) |
+| D13 | deb 수집·설치 방식 (2026-11-11) | 빌드는 임시 디렉터리에 따로 둔 apt 설정(상태·목록·캐시·원본)으로 빈 dpkg 상태의 폐쇄집합을 계산하고, 기준선(Essential/required + `ubuntu-server-minimal` + `linux-image-<커널>`)을 뺀 것만 받는다. `debs/` 는 `apt-ftparchive` 로 flat apt 저장소로 만든다. 설치는 apt 원본을 이 `file:` 저장소 하나로만 두고 최상위 패키지(고정 버전)만 지정한다 | 호스트 apt 를 쓰면 호스트 캐시에 있는 deb 이 `--print-uris` 에서 빠지고(같은 계산이 5개와 150개로 갈렸다), 기존 `docker.sources` 와 Signed-By 가 충돌한다. `dpkg -i *.deb` 는 대상에 이미 있는 패키지를 번들 버전으로 바꾼다(예: git). apt 는 설치된 버전이 의존성을 만족하면 그대로 둔다 |
+| D14 | 사전 준비 오프라인 증명 (2026-11-11) | 호스트 방화벽은 바꾸지 않는다. apt 원본이 번들 `file:` 저장소 하나뿐임, 설치 프로세스 트리의 `connect()` 기록(`strace -f`)에 AF_INET/AF_INET6·이름 해석 0건, `/var/cache/apt/archives` 의 deb 수 전후 비교, `/var/log/apt/history.log` 를 함께 보인다. `install-gpu-prep.sh` 는 인터넷 연결 확인을 하지 않는다 | 검증 인스턴스는 SSH 가 공인 IP 로 들어와 방화벽으로 외부를 막으면 접속을 잃는다. 판단에 쓰지 않는 외부 연결은 strace 증거를 흐린다 |
 
-버전 핀은 모두 `00-common/versions.env` 의 `OLLAMA_*` 에 있다.
+버전 핀은 모두 `00-common/versions.env` 에 있다(`OLLAMA_*`, GPU 사전 준비는 `NVIDIA_*` 와 Docker 절).
 
 ---
 
@@ -133,13 +139,57 @@ images/docker.io_library_nginx_1.30.6-alpine.tar     (skopeo, amd64 다이제스
 conf/{flavor, images.list, images.digests, docker-compose.yml.tmpl, nginx/default.conf}
 ```
 
+### GPU 사전 준비 번들
+
+NVIDIA GPU VM 에 드라이버·toolkit·Docker 를 오프라인으로 설치하는 번들이다(D11~D13). **대상 커널마다** 따로 빌드한다.
+
+| 항목 | 요건 |
+|---|---|
+| OS / 아키텍처 | 대상과 같은 Ubuntu 코드네임(예: 24.04 noble), amd64. 대상 커널로 부팅돼 있을 필요는 없다(같은 릴리스 아카이브에 그 커널용 모듈이 있으면 된다) |
+| 네트워크 | Ubuntu 아카이브(restricted 포함), `download.docker.com`, `nvidia.github.io` |
+| 권한·도구 | 일반 사용자. sudo 불필요(`apt-ftparchive` 가 없을 때만 `apt-utils` 를 sudo 로 설치). Docker 불필요 |
+| 디스크 | 약 1GB (`bundle/` 의 압축 해제 디렉터리 + tar.gz) |
+
+```bash
+cd offline-install
+./00-common/verify-urls.sh                        # "NVIDIA GPU 사전 준비" 5항목이 OK 여야 한다
+cd 85-ollama-embedding
+./build-gpu-prep.sh                               # 대상 커널 = 이 호스트의 uname -r
+./build-gpu-prep.sh --kernel 6.8.0-147-generic    # 다른 커널용 (대상 노드의 uname -r)
+```
+
+`build-gpu-prep.sh` 가 확인하는 것:
+
+1. 버전 결정: `nvidia-driver-595-open` 의 `595.99.02-*`, 대상 커널용 prebuilt 모듈 `linux-modules-nvidia-595-open-<커널>`, 그 모듈과 같은 버전의 flavour 메타 `linux-modules-nvidia-595-open-<flavour>`(`<커널>` 의 ABI 뒤 부분, 예: `aws`, `generic`). 메타에 같은 버전이 없으면 같은 버전을 가진 메타 후보를 출력하고 멈춘다
+2. 의존성 폐쇄집합: 빈 dpkg 상태에서 기준선(Essential/required + `ubuntu-server-minimal` + `linux-image-<커널>`)과 기준선 + 대상을 계산해 차이만 받는다. 최상위 패키지(드라이버 3개, toolkit 4개, Docker 6개)가 모두 차이에 있어야 한다
+3. 거부: 핵심 시스템 패키지(systemd·libc6·perl·python3 등, 10-k8s 와 같은 목록), 커널 패키지(`linux-image-`·`linux-headers-`·`linux-modules-<숫자>`·`linux-modules-extra-`), `dkms`·`nvidia-dkms-*` 가 섞이면 멈춘다
+4. 받은 deb 수 = 차이 수, `debs/Packages` 항목 수 = deb 수
+
+빌드 호스트에 남기는 변경은 없다. apt 상태·목록·캐시·원본을 임시 디렉터리로 돌리고(D13), 호스트의 Ubuntu 원본 목록은 복사해 읽기만 한다.
+
+산출물은 `bundle/ollama-embedding-gpu-prep-<코드네임>-<커널>.tar.gz` 와 `.sha256` 이다(예: `ollama-embedding-gpu-prep-noble-7.0.0-1014-aws.tar.gz`).
+크기는 2026-11-11 의존성 계산으로 deb 170개 약 499MiB 다(드라이버·toolkit 150개 약 398MiB + Docker). 빌드 실측 전 값이다.
+
+번들 내용:
+
+```
+BUNDLE-INFO  SHA256SUMS  install-gpu-prep.sh  README.md
+00-common/{versions.env, site.env.example, common.sh, os/}   (site.env 는 넣지 않는다)
+conf/{target-kernel, codename, gpu.specs, docker.specs, packages.list}
+debs/{*.deb, Packages, Packages.gz, Release}                  (flat apt 저장소)
+```
+
+- `conf/packages.list` 는 줄마다 `패키지 버전 바이트` 다. `gpu.specs`·`docker.specs` 는 설치할 최상위 패키지(`이름=버전`)다.
+- 이 번들은 사이트 값을 쓰지 않는다. 그래서 설치 때 나오는 `site.env 가 없어 site.env.example 의 예시 값을 쓴다` 경고는 무시해도 된다.
+- `00-common/build-in-container.sh` 의 `all` 에는 들어가지 않는다. 대상 커널마다 따로 빌드해야 하므로 위 명령으로 직접 실행한다.
+
 ---
 
 ## 4. 설치 (에어갭 VM)
 
 ### 4.1 전제
 
-- Docker Engine + Compose 플러그인 v2.30 이상 (10-k8s 번들 또는 사내 저장소로 설치)
+- Docker Engine + Compose 플러그인 v2.30 이상 (CPU 번들: 10-k8s 번들 또는 사내 저장소. GPU 번들: 4.2절 GPU 사전 준비 번들이 설치한다)
 - `curl`, `openssl`, `ss`
 - 디스크: 아래 표. containerd 이미지 저장소(`docker info` 의 `driver-type: io.containerd.snapshotter.v1`)는 이미지를 압축본과 해제본으로 이중 저장한다
 
@@ -155,24 +205,51 @@ conf/{flavor, images.list, images.digests, docker-compose.yml.tmpl, nginx/defaul
 `install.sh` 는 이미지가 아직 없을 때 docker 저장소 여유가 **이미지 tar 합계 × 2.5** 보다 작으면 중단한다.
 2.5 는 실측 비율(2.22, 2.24)에 10% 여유를 더한 값이다.
 
-### 4.2 GPU 번들의 추가 전제
+### 4.2 GPU 번들의 추가 전제 — GPU 사전 준비 번들
 
-호스트에 다음이 있어야 한다. 없으면 `install.sh` 가 이미지 적재 전에 중단한다.
+GPU 번들을 설치하려면 호스트에 다음이 있어야 한다. 없으면 `install.sh` 가 이미지 적재 전에 중단한다.
 
-1. NVIDIA 드라이버: `nvidia-smi -L` 이 GPU 를 보여야 한다. 커널 버전에 묶이고 재부팅이 필요하므로 OS 벤더·NVIDIA 절차로 미리 설치한다
-2. nvidia-container-toolkit 과 docker 런타임 설정
+1. NVIDIA 드라이버: `nvidia-smi -L` 이 GPU 를 보여야 한다
+2. nvidia-container-toolkit 과 docker 의 nvidia 런타임 등록
+3. Docker Engine + Compose 플러그인
 
-toolkit 오프라인 준비(같은 OS 버전의 온라인 호스트에서 NVIDIA apt 저장소를 등록한 뒤):
+드라이버가 없는 GPU VM 에서는 GPU 사전 준비 번들(3절 "GPU 사전 준비 번들")로 셋을 오프라인 설치한다.
+번들은 대상 노드의 커널(`uname -r`)과 Ubuntu 코드네임에 맞춰 빌드한 것이어야 한다.
 
 ```bash
-# 온라인 호스트
-apt-get download nvidia-container-toolkit nvidia-container-toolkit-base \
-                 libnvidia-container-tools libnvidia-container1
-# 에어갭 VM
-sudo dpkg -i ./*.deb
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
+sha256sum -c ollama-embedding-gpu-prep-noble-7.0.0-1014-aws.tar.gz.sha256
+tar xzf ollama-embedding-gpu-prep-noble-7.0.0-1014-aws.tar.gz && cd ollama-embedding-gpu-prep-noble-7.0.0-1014-aws
+sudo ./install-gpu-prep.sh --dry-run      # 사전 확인 + apt 시뮬레이션만. 아무것도 바꾸지 않는다
+sudo ./install-gpu-prep.sh                # 설치 + 판정. 재부팅 안내가 나온다
+sudo reboot
+sudo ./install-gpu-prep.sh --check-only   # 재부팅 뒤 판정 (8절)
+# 이어서 GPU 번들
+cd ../ollama-embedding-gpu-0.40.13 && sudo ./install.sh
 ```
+
+`install-gpu-prep.sh` 의 동작:
+
+| 상황 | 동작 |
+|---|---|
+| 커널이 번들과 다르다 | 아무것도 바꾸기 전에 멈춘다(`커널이 번들과 다르다: 지금 … / 번들 …`). 그 커널용 번들을 `./build-gpu-prep.sh --kernel <uname -r>` 로 만든다. 커널을 바꾸거나 DKMS 로 빌드하지 않는다 |
+| Ubuntu 코드네임이 다르다, 지금 커널이 Ubuntu 커널 패키지(`linux-image-<커널>`)가 아니다 | 멈춘다. 아무것도 바꾸지 않는다 |
+| 번들과 이름·버전이 다른 NVIDIA 드라이버가 있다(DKMS 드라이버 등) | 멈춘다. 이 번들은 드라이버가 없는 호스트용이다. 번들과 이름·버전이 같은 것만 있으면 재실행으로 보고 진행한다 |
+| Docker 엔진·containerd 가 이미 있다(`docker-ce`, `docker-ce-cli`, `docker.io`, `docker-engine`, `moby-engine`, `containerd.io`, `containerd`, `podman-docker` 중 하나 또는 `dockerd`) | Docker 는 설치하지 않고 그대로 둔다 |
+| Docker 가 없다 | 번들의 Docker(`versions.env` 핀)를 설치하고 enable 한다 |
+| apt 시뮬레이션 | 원본을 번들 `debs/` 하나로 두고 `apt-get -s install` 을 먼저 한다. 의존성이 풀리지 않거나, 패키지 제거·커널 패키지·dkms 설치가 하나라도 있으면 멈춘다. 업그레이드는 허용하고 목록을 출력한다 |
+| nvidia 런타임 | docker 런타임에 `nvidia` 가 없을 때만 `nvidia-ctk runtime configure --runtime=docker` 와 docker 재시작을 한다. 기존 `daemon.json` 은 `.bak.<시각>` 으로 복사한다. 실행 중인 컨테이너가 있으면 경고한다 |
+| nouveau | 차단 파일을 직접 만들지 않는다. `nvidia-kernel-common-595` 가 `/lib/modprobe.d/nvidia-graphics-drivers.conf` 를 설치하고 initramfs 를 다시 만든다. 스크립트는 그 결과를 판정한다 |
+| 재부팅 | 하지 않는다. nvidia 모듈이 적재되지 않았으면 재부팅 안내를 출력한다 |
+| 재실행 | 같은 번들로 다시 실행하면 apt 는 설치할 것이 없고, 런타임은 "변경 없음"이라 docker 를 재시작하지 않는다 |
+
+바꾸는 것과 되돌리는 방법(apt 원본 목록 `/etc/apt/sources.list*` 와 커널은 바꾸지 않는다):
+
+| 바뀐 것 | 되돌리는 방법 |
+|---|---|
+| NVIDIA 드라이버 패키지(`nvidia-driver-595-open`, prebuilt 모듈과 메타, X/GTK 의존성 포함), nouveau 차단 파일, initramfs 재생성 | `sudo apt-get purge 'nvidia-*595*' 'libnvidia-*595*' linux-modules-nvidia-595-open-<flavour> linux-modules-nvidia-595-open-<커널> nvidia-prime nvidia-settings && sudo apt-get autoremove`. `/etc/modprobe.d/nvidia-graphics-drivers-kms.conf` 가 남으면 지우고 `sudo update-initramfs -u` 뒤 재부팅하면 nouveau 로 돌아간다 |
+| toolkit 4개 패키지, `nvidia-cdi-refresh` 유닛 enable, `/var/run/cdi/nvidia.yaml` | `sudo apt-get purge nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1` |
+| `/etc/docker/daemon.json` (nvidia 런타임) | 백업(`daemon.json.bak.<시각>`)이 있으면 되돌리고, 없으면(새로 만든 파일) 지운다. 이어서 `sudo systemctl restart docker` |
+| Docker 패키지 6개와 의존 패키지(번들이 설치한 경우) | GPU 번들을 먼저 제거(`sudo ./install.sh --uninstall`)한 뒤 `sudo apt-get purge docker-ce docker-ce-cli docker-ce-rootless-extras containerd.io docker-buildx-plugin docker-compose-plugin && sudo apt-get autoremove`. 데이터까지 지우려면 `/var/lib/docker`, `/var/lib/containerd` 를 지운다(복구 불가) |
 
 VRAM: Q8_0 가중치가 8.0GB 다. VRAM 이 이보다 작으면 일부 레이어가 CPU 로 내려가고 `ollama ps` 의 PROCESSOR 가 CPU/GPU 혼합으로 나온다. VRAM 12GB 이상을 권장한다.
 
@@ -321,6 +398,18 @@ ollama 컨테이너에서 외부 TCP 연결 불가(1.1.1.1:443, registry.ollama.
 401 판정은 상태 코드, `Content-Type: application/json`, 본문이 샘플 문자열과 정확히 같은지를 모두 본다.
 키는 curl 인자가 아니라 stdin(`-H @-`)으로 넘겨 `ps` 에 보이지 않는다.
 
+GPU 사전 준비 판정(`install-gpu-prep.sh --check-only`, 4.2절):
+
+```
+  -- 설치 상태 --
+커널 = 번들 커널 · 다음 부팅 커널(/boot/vmlinuz-* 최신) = 번들 커널
+패키지 버전 = 번들 (드라이버 · prebuilt 모듈 · flavour 메타 · toolkit 4개)
+nouveau 차단 설정(modprobe -c 에 blacklist nouveau) · initramfs 에 nvidia-graphics-drivers.conf
+nvidia-ctk 1.20.1 · docker / compose 사용 가능 · docker 런타임에 nvidia
+  -- 드라이버 동작 (--check-only 는 항상, 설치 직후에는 nvidia 모듈이 적재돼 있을 때만) --
+nouveau 미적재 · nvidia 모듈 적재 · nvidia-smi -L 에 GPU · 드라이버 버전 = 595.99.02
+```
+
 ---
 
 ## 9. 자동 복구
@@ -364,7 +453,7 @@ sudo ./install.sh --test-restart
 | **GPU 번들 설치 (Tesla T4 16GB, 2026-11-11)** | **통과 24/24.** g4dn.2xlarge, Ubuntu 24.04.5, 커널 7.0.0-1014-aws, 드라이버 595.99.02(open, Ubuntu prebuilt 모듈), toolkit 1.20.1-1, Docker 29.8.1. 같은 커밋으로 그 호스트에서 다시 빌드한 번들을 썼다(모델 digest `9704fd98…` = 핀). `ollama ps` = `100% GPU`(9.1 GB, 37/37 레이어), VRAM 8805/15360 MiB. `--check-only`·재설치 멱등, `--test-restart` 통과, 재부팅 뒤 자동 기동과 GPU 재적재 확인 |
 | GPU 응답 시간 (T4, 같은 Q8_0 을 CPU 8 vCPU 로 돌린 것과 비교) | 4토큰 0.045초 (CPU 0.31초), 633토큰 0.49초 (CPU 39.9초). 컨테이너를 만든 뒤 처음 들어오는 긴 입력은 CUDA JIT 로 25.6초 걸렸고, 그 뒤로는 다시 생기지 않았다 |
 | GPU 번들 설치 (Quadro RTX 4000 Max-Q 8GB, 2026-11-11) | 통과 24/0. 다만 모델이 `28%/72% CPU/GPU` 혼합으로 적재됐다. 판정(`ollama_on_gpu`)은 혼합 적재도 통과시키므로 `100% GPU` 와 구분하지 못한다. VRAM 12GB 이상 권고(4.2절)와 맞는 결과다 |
-| **GPU 사전 준비의 오프라인 설치** | **미검증.** 위 두 호스트 모두 드라이버·toolkit·Docker 를 인터넷으로 설치했다. 드라이버·toolkit 을 오프라인 번들에 넣는 준비는 아직 없다. 드라이버는 커널 버전에 묶인다(Ubuntu 기본 경로 `ubuntu-drivers install` 은 최신 커널을 함께 설치한다. 커널을 고정하려면 `linux-modules-nvidia-595-open-$(uname -r)` 와 버전을 지정한 flavour 메타를 함께 설치한다) |
+| **GPU 사전 준비의 오프라인 설치** | **미검증(실기 검증 전).** 번들과 설치 도구는 3절 "GPU 사전 준비 번들"과 4.2절에 있다. 위 두 호스트는 드라이버·toolkit·Docker 를 인터넷으로 설치했다 |
 
 ```
 === 검증 결과: 통과 22 / 실패 0 ===
@@ -395,7 +484,12 @@ ollama: "inference compute" id=cpu library=cpu ... total="125.4 GiB"
 
 | 증상 | 원인 | 조치 |
 |---|---|---|
-| `GPU 번들 사전 조건이 없다` | 드라이버 또는 toolkit 없음 | 4.2절. 또는 CPU 번들을 쓴다 |
+| `GPU 번들 사전 조건이 없다` | 드라이버 또는 toolkit 없음 | 4.2절 GPU 사전 준비 번들. 또는 CPU 번들을 쓴다 |
+| `커널이 번들과 다르다` (`install-gpu-prep.sh`) | GPU 사전 준비 번들이 다른 커널용이다 | 대상 노드의 `uname -r` 로 `./build-gpu-prep.sh --kernel <커널>` 을 실행해 그 커널용 번들을 만든다(3절). 커널은 바꾸지 않는다 |
+| `다른 NVIDIA 드라이버가 이미 있다` | DKMS 드라이버 등 번들과 이름·버전이 다른 드라이버가 설치돼 있다 | 그 드라이버가 동작하면(`nvidia-smi -L`) 사전 준비 번들을 쓰지 않는다. 바꾸려면 기존 드라이버를 지우고 재부팅한 뒤 다시 실행한다 |
+| `번들 저장소만으로 의존성이 풀리지 않는다` | 같은 코드네임이지만 대상의 OS 패키지(기준선)가 빌드 시점 아카이브보다 오래됐다. 번들의 deb 이 더 새 버전을 요구한다 | `--dry-run` 출력 끝의 apt 메시지에서 빠진 패키지와 요구 버전을 확인한다. 그 패키지를 사내 저장소 등으로 먼저 갱신하거나, 대상과 패치 수준이 같은 아카이브로 다시 빌드한다 |
+| `재부팅이 필요하다` | 설치 직후 nouveau 가 적재돼 있거나 nvidia 모듈이 아직 없다 | 정상이다. `sudo reboot` 뒤 `sudo ./install-gpu-prep.sh --check-only` |
+| `다음 부팅 커널 = 번들 커널` FAIL | 설치 뒤 unattended-upgrades 등으로 새 커널이 설치됐다. 재부팅하면 번들 모듈이 없는 커널로 뜬다 | 재부팅하기 전에 `ls /boot/vmlinuz-*` 로 확인한다. 새 커널로 부팅하려면 그 커널용 번들을 만든다. 번들 커널로 부팅하려면 GRUB 기본 항목을 번들 커널로 지정한다 |
 | `could not select device driver "nvidia"` | toolkit 이 docker 에 등록되지 않음 | `nvidia-ctk runtime configure --runtime=docker` 후 docker 재시작 |
 | `docker 저장소 여유가 부족하다` | containerd 저장소 이중 저장 | 4.1절. 저장소 볼륨을 늘린다 |
 | `포트 80 를 다른 프로세스가 쓰고 있다` | 포트 충돌 | `site.env` 의 `OLLAMA_EMBED_PORT` 를 바꾼다 |
@@ -419,3 +513,5 @@ docker image rm ollama-qwen3-embedding:0.40.13-cpu ollama-qwen3-embedding:0.40.1
                 docker.io/library/nginx:1.30.6-alpine
 sudo rm -rf /opt/ollama-embedding
 ```
+
+GPU 사전 준비(드라이버·toolkit·Docker·`daemon.json`)를 되돌리는 방법은 4.2절 표에 있다.

@@ -179,6 +179,7 @@ cd offline-install
 > - **85-ollama-embedding**: 이미지 빌드 중에 `ollama serve`·`ollama pull` 로 모델을 넣습니다([85 README](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/85-ollama-embedding/README.md) D2). 호스트에서 `85-ollama-embedding/build-bundle.sh all`(CPU 번들 + GPU 번들)을 실행합니다.
 >   - 빌드 호스트 요건은 Linux x86_64, Docker Engine + buildx, RAM 16GB 이상, 디스크 약 80GB 입니다(85 README 3절). 이 단계만으로 약 23분이 더 걸립니다(85 README 3절 실측 1359초). Ollama 번들이 필요 없으면 `all` 대신 단계를 나열합니다.
 >   - 그래도 호스트 Docker 를 쓸 수 없으면(Docker 미설치, 데몬 정지, sudo 불가, Linux x86_64 아님) `WARN` 으로 원인과 조치를 출력하고 85 만 건너뜁니다. 나머지 단계는 그대로 빌드합니다. 종료 코드는 `all` 이면 영향이 없고, `85-ollama-embedding` 을 단계로 직접 지정했으면 1 입니다.
+>   - GPU 사전 준비 번들(`85-ollama-embedding/build-gpu-prep.sh`, 드라이버·toolkit·Docker)은 `all` 에 들어 있지 않습니다. 대상 커널마다 대상과 같은 Ubuntu 버전의 온라인 호스트에서 따로 빌드합니다([85 README](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/85-ollama-embedding/README.md) 3절).
 > - 70-mssql 이나 85 를 빌드할 때 실행 계정이 docker 를 쓸 수 없으면, 빌드 시작 때 한 번 docker 그룹 권한을 구성합니다. 이미 docker 그룹 회원인데 지금 세션에만 그룹이 없으면(그룹 추가 전에 연 셸이나 tmux) 아무것도 바꾸지 않고 `sg docker` 로 실행합니다. 이때 번들 파일의 그룹은 `docker` 가 됩니다. 회원이 아니면 `sudo usermod -aG docker <계정>` 을 실행합니다. **docker 그룹은 root 와 같은 권한입니다.** 터미널이 아닌 곳에서 실행하면 sudo 암호를 묻지 않습니다(`sudo -n`).
 > - 45-redis 와 70-mssql 만 지정하고 호스트 Docker 를 쓸 수 있으면 컨테이너 단계가 45-redis 하나만 남으므로 45-redis 도 podman 없이 호스트에서 빌드합니다.
 
@@ -524,9 +525,15 @@ sudo ./install.sh --check-only     # Deployment·APIService·kubectl top·imageI
 ### 4.6 (선택) 임베딩 서비스 ([`85-ollama-embedding`](file:///Users/hyungsoo.kim/Works/vanilla-k8s-as-install/offline-install/85-ollama-embedding/README.md))
 Ollama 로 `qwen3-embedding` 8b 를 서빙하고 앞단 nginx 가 `Authorization: Bearer <키>` 를 검사합니다. 모델은 이미지 안에 들어 있어 에어갭 VM 에서 번들의 이미지 tar 만으로 설치됩니다.
 CPU 번들(Q4_K_M)과 GPU 번들(Q8_0)을 따로 만들고, 하드웨어에 맞는 번들 하나만 옮깁니다. 단독 VM 의 Docker Compose 로 실행하며 AS 설치와 무관합니다.
+GPU VM 은 GPU 번들 전에 GPU 사전 준비 번들로 드라이버·toolkit·Docker 를 설치하고 재부팅합니다(85 README 4.2절).
 ```bash
 # 빌드 호스트(Linux x86_64 + Docker, 인터넷 O)
 cd offline-install/85-ollama-embedding && ./build-bundle.sh        # cpu | gpu | all(기본)
+# GPU 사전 준비 번들: 대상과 같은 Ubuntu 버전의 온라인 호스트(Docker 불필요)
+./build-gpu-prep.sh --kernel <대상 노드의 uname -r>               # 생략하면 이 호스트의 uname -r
+# 에어갭 GPU VM: GPU 번들보다 먼저
+cd ollama-embedding-gpu-prep-<코드네임>-<커널> && sudo ./install-gpu-prep.sh && sudo reboot
+sudo ./install-gpu-prep.sh --check-only                           # 재부팅 뒤 드라이버·toolkit·Docker 판정
 # 에어갭 VM
 tar xzf ollama-embedding-cpu-0.40.13.tar.gz && cd ollama-embedding-cpu-0.40.13
 sudo ./install.sh                                                 # 키 자동 생성, 401/임베딩 판정

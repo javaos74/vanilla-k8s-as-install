@@ -168,7 +168,8 @@ cd 85-ollama-embedding
 빌드 호스트에 남기는 변경은 없다. apt 상태·목록·캐시·원본을 임시 디렉터리로 돌리고(D13), 호스트의 Ubuntu 원본 목록은 복사해 읽기만 한다.
 
 산출물은 `bundle/ollama-embedding-gpu-prep-<코드네임>-<커널>.tar.gz` 와 `.sha256` 이다(예: `ollama-embedding-gpu-prep-noble-7.0.0-1014-aws.tar.gz`).
-크기는 2026-11-11 의존성 계산으로 deb 170개 약 499MiB 다(드라이버·toolkit 150개 약 398MiB + Docker). 빌드 실측 전 값이다.
+크기는 2026-11-11 실측(빌드 호스트 g4dn.2xlarge, Ubuntu 24.04.5, 커널 7.0.0-1014-aws)으로 deb 170개 498.5MiB, tar.gz 약 498MiB 이고, 빌드는 85초 걸렸다.
+같은 호스트에서 `--kernel 6.8.0-147-generic` 으로도 만들어졌다(deb 170개 498.3MiB, 75초. 모듈과 메타 `6.8.0-147.147+1`).
 
 번들 내용:
 
@@ -237,6 +238,7 @@ cd ../ollama-embedding-gpu-0.40.13 && sudo ./install.sh
 | Docker 엔진·containerd 가 이미 있다(`docker-ce`, `docker-ce-cli`, `docker.io`, `docker-engine`, `moby-engine`, `containerd.io`, `containerd`, `podman-docker` 중 하나 또는 `dockerd`) | Docker 는 설치하지 않고 그대로 둔다 |
 | Docker 가 없다 | 번들의 Docker(`versions.env` 핀)를 설치하고 enable 한다 |
 | apt 시뮬레이션 | 원본을 번들 `debs/` 하나로 두고 `apt-get -s install` 을 먼저 한다. 의존성이 풀리지 않거나, 패키지 제거·커널 패키지·dkms 설치가 하나라도 있으면 멈춘다. 업그레이드는 허용하고 목록을 출력한다 |
+| 번들 deb 중 설치하지 않는 것 | 대상에 이미 있는 패키지는 설치된 버전이 의존성을 만족하면 그대로 둔다(예: `git`). 번들만으로 풀리지 않는 Recommends 는 apt 가 건너뛴다. 빌드 기준선의 폐쇄집합에 들어 있어 번들에 넣지 않은 `python3-xkit` 이 대상에 없으면 `nvidia-settings`(GUI 설정 도구, 드라이버의 Recommends)와 그 GTK·글꼴 의존성은 설치되지 않는다. 드라이버·CUDA·컨테이너 동작에는 영향이 없다(10절 실측: 170개 중 79개 설치) |
 | nvidia 런타임 | docker 런타임에 `nvidia` 가 없을 때만 `nvidia-ctk runtime configure --runtime=docker` 와 docker 재시작을 한다. 기존 `daemon.json` 은 `.bak.<시각>` 으로 복사한다. 실행 중인 컨테이너가 있으면 경고한다 |
 | nouveau | 차단 파일을 직접 만들지 않는다. `nvidia-kernel-common-595` 가 `/lib/modprobe.d/nvidia-graphics-drivers.conf` 를 설치하고 initramfs 를 다시 만든다. 스크립트는 그 결과를 판정한다 |
 | 재부팅 | 하지 않는다. nvidia 모듈이 적재되지 않았으면 재부팅 안내를 출력한다 |
@@ -246,7 +248,7 @@ cd ../ollama-embedding-gpu-0.40.13 && sudo ./install.sh
 
 | 바뀐 것 | 되돌리는 방법 |
 |---|---|
-| NVIDIA 드라이버 패키지(`nvidia-driver-595-open`, prebuilt 모듈과 메타, X/GTK 의존성 포함), nouveau 차단 파일, initramfs 재생성 | `sudo apt-get purge 'nvidia-*595*' 'libnvidia-*595*' linux-modules-nvidia-595-open-<flavour> linux-modules-nvidia-595-open-<커널> nvidia-prime nvidia-settings && sudo apt-get autoremove`. `/etc/modprobe.d/nvidia-graphics-drivers-kms.conf` 가 남으면 지우고 `sudo update-initramfs -u` 뒤 재부팅하면 nouveau 로 돌아간다 |
+| NVIDIA 드라이버 패키지(`nvidia-driver-595-open`, prebuilt 모듈과 메타, X 의존성 포함. `nvidia-settings` 와 GTK 의존성은 그 Recommends 가 풀린 호스트에만 있다), nouveau 차단 파일, initramfs 재생성 | `sudo apt-get purge 'nvidia-*595*' 'libnvidia-*595*' linux-modules-nvidia-595-open-<flavour> linux-modules-nvidia-595-open-<커널> nvidia-prime nvidia-settings && sudo apt-get autoremove`. `/etc/modprobe.d/nvidia-graphics-drivers-kms.conf` 가 남으면 지우고 `sudo update-initramfs -u` 뒤 재부팅하면 nouveau 로 돌아간다 |
 | toolkit 4개 패키지, `nvidia-cdi-refresh` 유닛 enable, `/var/run/cdi/nvidia.yaml` | `sudo apt-get purge nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1` |
 | `/etc/docker/daemon.json` (nvidia 런타임) | 백업(`daemon.json.bak.<시각>`)이 있으면 되돌리고, 없으면(새로 만든 파일) 지운다. 이어서 `sudo systemctl restart docker` |
 | Docker 패키지 6개와 의존 패키지(번들이 설치한 경우) | GPU 번들을 먼저 제거(`sudo ./install.sh --uninstall`)한 뒤 `sudo apt-get purge docker-ce docker-ce-cli docker-ce-rootless-extras containerd.io docker-buildx-plugin docker-compose-plugin && sudo apt-get autoremove`. 데이터까지 지우려면 `/var/lib/docker`, `/var/lib/containerd` 를 지운다(복구 불가) |
@@ -487,7 +489,7 @@ ollama: "inference compute" id=cpu library=cpu ... total="125.4 GiB"
 | `GPU 번들 사전 조건이 없다` | 드라이버 또는 toolkit 없음 | 4.2절 GPU 사전 준비 번들. 또는 CPU 번들을 쓴다 |
 | `커널이 번들과 다르다` (`install-gpu-prep.sh`) | GPU 사전 준비 번들이 다른 커널용이다 | 대상 노드의 `uname -r` 로 `./build-gpu-prep.sh --kernel <커널>` 을 실행해 그 커널용 번들을 만든다(3절). 커널은 바꾸지 않는다 |
 | `다른 NVIDIA 드라이버가 이미 있다` | DKMS 드라이버 등 번들과 이름·버전이 다른 드라이버가 설치돼 있다 | 그 드라이버가 동작하면(`nvidia-smi -L`) 사전 준비 번들을 쓰지 않는다. 바꾸려면 기존 드라이버를 지우고 재부팅한 뒤 다시 실행한다 |
-| `번들 저장소만으로 의존성이 풀리지 않는다` | 같은 코드네임이지만 대상의 OS 패키지(기준선)가 빌드 시점 아카이브보다 오래됐다. 번들의 deb 이 더 새 버전을 요구한다 | `--dry-run` 출력 끝의 apt 메시지에서 빠진 패키지와 요구 버전을 확인한다. 그 패키지를 사내 저장소 등으로 먼저 갱신하거나, 대상과 패치 수준이 같은 아카이브로 다시 빌드한다 |
+| `번들 저장소만으로 의존성이 풀리지 않는다` | 같은 코드네임이지만 대상의 OS 패키지(기준선)가 빌드 시점 아카이브보다 오래됐다. 번들의 deb 이 더 새 버전을 요구한다. 또는 빌드 기준선에 있어 번들에 넣지 않은 패키지가 대상에 없고, 그것이 Depends 다(Recommends 면 건너뛴다, 4.2절) | `--dry-run` 출력 끝의 apt 메시지에서 빠진 패키지와 요구 버전을 확인한다. 그 패키지를 사내 저장소 등으로 먼저 갱신하거나, 대상과 패치 수준이 같은 아카이브로 다시 빌드한다 |
 | `재부팅이 필요하다` | 설치 직후 nouveau 가 적재돼 있거나 nvidia 모듈이 아직 없다 | 정상이다. `sudo reboot` 뒤 `sudo ./install-gpu-prep.sh --check-only` |
 | `다음 부팅 커널 = 번들 커널` FAIL | 설치 뒤 unattended-upgrades 등으로 새 커널이 설치됐다. 재부팅하면 번들 모듈이 없는 커널로 뜬다 | 재부팅하기 전에 `ls /boot/vmlinuz-*` 로 확인한다. 새 커널로 부팅하려면 그 커널용 번들을 만든다. 번들 커널로 부팅하려면 GRUB 기본 항목을 번들 커널로 지정한다 |
 | `could not select device driver "nvidia"` | toolkit 이 docker 에 등록되지 않음 | `nvidia-ctk runtime configure --runtime=docker` 후 docker 재시작 |

@@ -340,10 +340,16 @@ run_checks() {
         check "드라이버 버전 = ${NVIDIA_DRIVER_VERSION} (nvidia-smi)" driver_version_ok
     fi
 
-    local dv drv gpus
+    # nvidia-smi 는 드라이버와 통신하지 못하면 오류 문구를 stdout 에 쓰고 실패한다.
+    # 성공했을 때만 값을 쓴다(재부팅 전에는 "?").
+    local dv drv="" gpus="" out
     dv="$(docker version -f '{{.Server.Version}}' 2>/dev/null || true)"
-    drv="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -n 1 || true)"
-    gpus="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | paste -sd, - || true)"
+    if out="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null)"; then
+        drv="${out%%$'\n'*}"
+    fi
+    if out="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null)"; then
+        gpus="$(paste -sd, - <<<"$out")"
+    fi
     log "docker ${dv:-?} / 드라이버 ${drv:-?} / GPU ${gpus:-?}"
     check_summary
 }
